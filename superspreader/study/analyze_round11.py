@@ -118,6 +118,7 @@ def worlds():
         for arm in r11_arms(lam):
             labels.append((f"{nm}_{arm.split('_')[-1]}", R11, arm))
     labels.append(("world3_events_only", R10, "r10_w3_rate0.034"))
+    labels.append(("world2_round10_gate_L10_sh1", R9, "r9_s9_t1_L10_sh1"))
     rows, joint, clusters, comp = collect(labels)
     write_csv(OUT / "59_r111_worlds.csv", rows)
     write_csv(OUT / "59_r111_worlds_offspring.csv", joint)
@@ -126,14 +127,16 @@ def worlds():
 
 
 def pairs():
-    """Repeat-infection correlation for world 2a, and the class decomposition that stands in for R11-2."""
+    """Repeat-infection correlation for world 2a (and round-10 world 2), plus the class decomposition for R11-2."""
     from analyze import load_daily
     from analyze_round6 import episode_pairs, pearson, spearman as sp6
-    sources = [("world1_multiplier_only", R10 / "r10" / "pairs_w1", R10)]
+    fallback_hvi = R11 / "r11" / "pairs_w2_L30_sh0.70"
+    sources = [("world1_multiplier_only", R10 / "r10" / "pairs_w1", None)]
     for d in sorted((R11 / "r11").glob("pairs_*")):
-        sources.append((f"world2a_{d.name[len('pairs_'):]}", d, R11))
+        sources.append((f"world2a_{d.name[len('pairs_'):]}", d, d))
+    sources.append(("world2_round10_gate_L10_sh1", R10 / "r10" / "pairs_w2", fallback_hvi))
     rows = []
-    for name, folder, _base in sources:
+    for name, folder, hvi_folder in sources:
         runs = sorted(folder.glob("rep*"))
         if not runs:
             continue
@@ -143,7 +146,7 @@ def pairs():
             prs, _w2, _m, _n = episode_pairs(run, last_day)
             per_rep.append(prs)
             flags = None
-            cls = run / "hvi.csv"
+            cls = (hvi_folder / run.name / "hvi.csv") if hvi_folder is not None else (run / "hvi.csv")
             if cls.exists():
                 with open(cls) as handle:
                     next(handle)
@@ -166,7 +169,8 @@ def pairs():
                     continue
                 bp.append(pearson([q[2] for q in pp], [q[4] for q in pp]))
             lo, hi = interval(bp) if bp else (float("nan"), float("nan"))
-            return {"pairs": len(allp), "pearson": rp, "pearson_low": lo, "pearson_high": hi, "spearman": rs}
+            return {"pairs": len(allp), "pearson": rp, "pearson_low": lo, "pearson_high": hi, "spearman": rs,
+                    "mean_ep1": float(np.mean(x)), "mean_ep2": float(np.mean(y))}
         base_row = {"world": name, "replicates": len(per_rep)}
         allc = corr(per_rep)
         if allc:
