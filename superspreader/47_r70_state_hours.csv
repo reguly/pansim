@@ -1,0 +1,9 @@
+agent_type,name,agents,disc_hours_per_agent_day_W,disc_hours_per_agent_day_N,disc_hours_per_agent_day_M,disc_hours_per_agent_day_S,infectious_hours_W,infectious_hours_N,infectious_hours_M,infectious_hours_S
+1,Infant,3830,0.3204,0,0,0,1.313e+04,504,48,0
+2,Kindergarden student,5854,2.243,0.000424,0.0001383,0,2.796e+04,1248,648,0
+3,Elementary school student,12033,3.505,0.0006549,0.0001835,0,6.598e+04,4104,3912,0
+4,High school student,9318,3.69,0.0004861,0.0002306,0,3.552e+04,2496,2208,0
+5,university student,9154,3.965,0.0009409,0.0003453,0,4.69e+04,4272,3888,0
+6,Full time worker,74839,4.203,0.001623,0.000496,0.0004123,2.427e+05,4.322e+04,4.606e+04,5352
+7,afternoon shift worker,4727,5.056,0.001565,0.00051,0,1.81e+04,2904,3024,744
+8,stay-at-home,58991,4.256,0.001086,0.0002307,0.0008863,1.329e+05,2.959e+04,3.168e+04,1.445e+04

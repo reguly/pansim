@@ -1,5 +1,13 @@
 #pragma once
 #include <iostream>
+#include <fstream>
+#include <random>
+#include <vector>
+#include <cmath>
+#include <sstream>
+#include <algorithm>
+#include <unordered_map>
+#include "customExceptions.h"
 #include "timeHandler.h"
 #include "datatypes.h"
 #include "cxxopts.hpp"
@@ -169,6 +177,23 @@ namespace RealMovementOps {
         unsigned schoolAgeRestriction;
         bool quarantineImmuneActive;
         bool lockdownNonvaccActive;
+        // High-velocity individuals (HVI): persistent per-agent activity multiplier on discretionary visits
+        const float* hviMultPtr = nullptr;
+        const uint8_t* hviClassPtr = nullptr;
+        const uint8_t* hviRotatePtr = nullptr;
+        uint8_t* repeatLeftPtr = nullptr;
+        uint8_t* repeatTypePtr = nullptr;
+        unsigned* repeatStepsPtr = nullptr;
+        unsigned hviStatesMask = 3u;
+        bool hviInfectiousOnly = false;
+        unsigned hviVisitsFactor = 1;
+        uint8_t* rolePtr = nullptr;  // activity role (event type) of the current stay, for the mobility log
+        bool hviLeverDuration = false;  // false: the multiplier changes discretionary chances against home; true: it scales durations
+        // Round 8: venue-type tilt of the class, minority-dominated scene, isolation breaking
+        float hviTilt = 0.0f;               // share of the class's low-L discretionary visits moved to the high-L types at the same duration
+        unsigned hviHighMask = 0u;          // bit t set: location type t is a high-L type
+        float hviOthersHighScale = 1.0f;    // chances of the high-L types of agents outside the class are multiplied by this, the difference goes to home
+        bool hviIsolationBreak = false;     // class members keep their W schedule in the well-being states N and M
     };
 
     template<typename PPState, typename AgentMeta, typename LocationType>
@@ -245,6 +270,80 @@ namespace RealMovementOps {
                 }
             }
         }
+    }
+
+    constexpr unsigned hviRotatingCode = 255u;
+
+    [[nodiscard]] inline HD bool isDiscretionaryType(unsigned t) {
+        // public space 1, restaurants 5, large venues 6, short-visit shops 7, long-visit shops 8, church 9, recreation 10
+        return t < 32u && ((0x7E2u >> t) & 1u);
+    }
+
+    // Uniform pick over the agent's own venues of types 5, 7 and 8 (the rotating set of an occupationally mobile worker)
+    [[nodiscard]] inline HD unsigned findRotatingLocation(unsigned agent,
+        unsigned long* locationOffsetPtr,
+        unsigned* possibleLocationsPtr,
+        unsigned* possibleTypesPtr) {
+        unsigned counter = 0;
+        for (unsigned i = locationOffsetPtr[agent]; i < locationOffsetPtr[agent + 1]; i++) {
+            unsigned t = possibleTypesPtr[i];
+            if (t == 5u || t == 7u || t == 8u) counter++;
+        }
+        if (counter == 0) return std::numeric_limits<unsigned>::max();
+        unsigned pick = RandomGenerator::randomUnsigned(counter);
+        unsigned c = 0;
+        for (unsigned i = locationOffsetPtr[agent]; i < locationOffsetPtr[agent + 1]; i++) {
+            unsigned t = possibleTypesPtr[i];
+            if (t == 5u || t == 7u || t == 8u) {
+                if (c == pick) return possibleLocationsPtr[i];
+                c++;
+            }
+        }
+        return std::numeric_limits<unsigned>::max();
+    }
+
+    // Chance of event j of a window for an agent whose discretionary activity multiplier is u. Discretionary chances are
+    // scaled by g and the home event takes up the difference, so that the window still sums as before. A window without a
+    // home event, or without a discretionary event, is unchanged. For u > 1 the factor g stops where the home chance reaches 0.
+    [[nodiscard]] inline HD float hviEffectiveChance(const AgentTypeList::Event* ev, unsigned begin, unsigned num, unsigned j, float u, unsigned homeType) {
+        const float c = ev[begin + j].chance;
+        if (u == 1.0f) return c;
+        float sumDisc = 0.0f;
+        float homeChance = 0.0f;
+        int homeIdx = -1;
+        for (unsigned k = 0; k < num; ++k) {
+            const unsigned t = ev[begin + k].locationType;
+            if (isDiscretionaryType(t)) sumDisc += ev[begin + k].chance;
+            else if (t == homeType && homeIdx < 0) {
+                homeIdx = static_cast<int>(k);
+                homeChance = ev[begin + k].chance;
+            }
+        }
+        if (homeIdx < 0 || !(sumDisc > 0.0f)) return c;
+        float g = u;
+        if (g > 1.0f) g = fminf(g, 1.0f + homeChance / sumDisc);
+        if (static_cast<int>(j) == homeIdx) return fmaxf(homeChance - (g - 1.0f) * sumDisc, 0.0f);
+        if (isDiscretionaryType(ev[begin + j].locationType)) return c * g;
+        return c;
+    }
+
+    [[nodiscard]] inline HD bool isHighType(unsigned t, unsigned mask) { return t < 32u && ((mask >> t) & 1u); }
+
+    // Chance of event j of a window for an agent outside the class when the scene is minority-dominated: the chances of the
+    // high-L types are multiplied by s and the home event takes up the difference. A window without a home event is unchanged.
+    [[nodiscard]] inline HD float hviOthersChance(const AgentTypeList::Event* ev, unsigned begin, unsigned num, unsigned j, float s, unsigned homeType, unsigned mask) {
+        const float c = ev[begin + j].chance;
+        float sumHigh = 0.0f;
+        int homeIdx = -1;
+        for (unsigned k = 0; k < num; ++k) {
+            const unsigned t = ev[begin + k].locationType;
+            if (isHighType(t, mask)) sumHigh += ev[begin + k].chance;
+            else if (t == homeType && homeIdx < 0) homeIdx = static_cast<int>(k);
+        }
+        if (homeIdx < 0 || !(sumHigh > 0.0f)) return c;
+        if (static_cast<int>(j) == homeIdx) return c + (1.0f - s) * sumHigh;
+        if (isHighType(ev[begin + j].locationType, mask)) return c * s;
+        return c;
     }
 
     template<typename PPState, typename AgentMeta, typename LocationType>
@@ -585,7 +684,56 @@ namespace RealMovementOps {
             }
         }
 
-        unsigned agentTypeOffset = AgentTypeList::getOffsetIndex(agentType, wBState, a.day);
+        // HVI: remaining parts of a split discretionary stay (visits lever) or of a rotating workday
+        if (a.repeatLeftPtr != nullptr && a.repeatLeftPtr[i] > 0 && wBState != states::WBStates::S) {
+            unsigned rtype = a.repeatTypePtr[i];
+            unsigned rloc = (rtype == RealMovementOps::hviRotatingCode)
+                                ? RealMovementOps::findRotatingLocation(i, a.locationOffsetPtr, a.possibleLocationsPtr, a.possibleTypesPtr)
+                                : RealMovementOps::findActualLocationForType(i,
+                                      rtype,
+                                      a.locationOffsetPtr,
+                                      a.possibleLocationsPtr,
+                                      a.possibleTypesPtr,
+                                      a.homeType,
+                                      a.schoolType,
+                                      a.workType,
+                                      1,
+                                      a.locationStatesPtr);
+            // a repeat is a visit to a different venue when the agent has one
+            for (int attempt = 0; attempt < 8 && rloc == a.agentLocationsPtr[i]; ++attempt) {
+                rloc = (rtype == RealMovementOps::hviRotatingCode)
+                           ? RealMovementOps::findRotatingLocation(i, a.locationOffsetPtr, a.possibleLocationsPtr, a.possibleTypesPtr)
+                           : RealMovementOps::findActualLocationForType(i,
+                                 rtype,
+                                 a.locationOffsetPtr,
+                                 a.possibleLocationsPtr,
+                                 a.possibleTypesPtr,
+                                 a.homeType,
+                                 a.schoolType,
+                                 a.workType,
+                                 1,
+                                 a.locationStatesPtr);
+            }
+            a.repeatLeftPtr[i]--;
+            if (rloc != std::numeric_limits<unsigned>::max() && a.locationStatesPtr[rloc] != false
+                && a.closedUntilPtr[rloc] <= a.timestamp) {
+                a.agentLocationsPtr[i] = rloc;
+                if (a.rolePtr != nullptr) a.rolePtr[i] = static_cast<uint8_t>(rtype == RealMovementOps::hviRotatingCode ? a.workType : rtype);
+                a.stepsUntilMovePtr[i] = a.repeatStepsPtr[i];
+                if (agentHome != std::numeric_limits<unsigned>::max() && a.agentLocationsPtr[i] != agentHome
+                    && a.stepsUntilMovePtr[i] > 60 / a.timeStep)
+                    a.stayedHomePtr[i] = false;
+                a.stepsUntilMovePtr[i]--;
+                return;
+            }
+            a.repeatLeftPtr[i] = 0;
+        }
+
+        states::WBStates scheduleState = wBState;
+        if (a.hviIsolationBreak && a.hviClassPtr != nullptr && a.hviClassPtr[i] != 0
+            && (wBState == states::WBStates::N || wBState == states::WBStates::M))
+            scheduleState = states::WBStates::W;
+        unsigned agentTypeOffset = AgentTypeList::getOffsetIndex(agentType, scheduleState, a.day);
         unsigned eventsBegin = a.eventOffsetPtr[agentTypeOffset];
         unsigned eventsEnd = a.eventOffsetPtr[agentTypeOffset + 1];
 
@@ -647,6 +795,7 @@ namespace RealMovementOps {
                 0,
                 nullptr);
             a.agentLocationsPtr[i] = myHome;
+            if (a.rolePtr != nullptr) a.rolePtr[i] = static_cast<uint8_t>(newLocationType);
             a.stepsUntilMovePtr[i] = a.simTime.getStepsUntilMidnight(a.timeStep);
             checkLarger(i, a);
             if (i == a.tracked)
@@ -667,11 +816,24 @@ namespace RealMovementOps {
                 basicDuration = a.eventsPtr[activeEventsBegin].duration;
             } else {
                 double rand = RandomGenerator::randomReal(1.0);
-                double threshhold = a.eventsPtr[activeEventsBegin].chance;
+                float hviU = 1.0f;
+                if (a.hviMultPtr != nullptr && !a.hviLeverDuration && ((a.hviStatesMask >> static_cast<unsigned>(wBState)) & 1u)
+                    && (!a.hviInfectiousOnly || a.agentStatesPtr[i].isInfectious()))
+                    hviU = a.hviMultPtr[i];
+                const bool othersScene = a.hviOthersHighScale != 1.0f && a.hviClassPtr != nullptr && a.hviClassPtr[i] == 0
+                                         && ((a.hviStatesMask >> static_cast<unsigned>(wBState)) & 1u);
+                double threshhold = othersScene ? RealMovementOps::hviOthersChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, 0, a.hviOthersHighScale, a.homeType, a.hviHighMask)
+                                    : hviU == 1.0f ? a.eventsPtr[activeEventsBegin].chance
+                                                   : RealMovementOps::hviEffectiveChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, 0, hviU, a.homeType);
                 unsigned idx = 0;
                 while (rand > threshhold && idx < numPotentialEvents) {
                     idx++;
-                    threshhold += a.eventsPtr[activeEventsBegin + idx].chance;
+                    if (othersScene) {
+                        if (idx < numPotentialEvents)
+                            threshhold += RealMovementOps::hviOthersChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, idx, a.hviOthersHighScale, a.homeType, a.hviHighMask);
+                    } else if (hviU == 1.0f) threshhold += a.eventsPtr[activeEventsBegin + idx].chance;
+                    else if (idx < numPotentialEvents)
+                        threshhold += RealMovementOps::hviEffectiveChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, idx, hviU, a.homeType);
                 }
                 if (idx == numPotentialEvents) {
                     /*printf("Error, overrun1: %g, agentType %d WB %d, day %d, time %d:%d\n",rand, agentType + 1, wBState,
@@ -693,16 +855,54 @@ namespace RealMovementOps {
                 if (i == a.tracked) printf("Agent %d not going to work because child at home\n", i);
             }
 
-            unsigned newLocation = RealMovementOps::findActualLocationForType(i,
-                newLocationType,
-                a.locationOffsetPtr,
-                a.possibleLocationsPtr,
-                a.possibleTypesPtr,
-                a.homeType,
-                a.schoolType,
-                a.workType,
-                numPotentialEvents == 1,
-                a.locationStatesPtr);
+            // Round 8 tilt: a class member's low-L discretionary visit is moved, at the same duration, to a high-L type the agent has
+            if (a.hviTilt > 0.0f && a.hviClassPtr != nullptr && a.hviClassPtr[i] != 0
+                && ((a.hviStatesMask >> static_cast<unsigned>(wBState)) & 1u)
+                && RealMovementOps::isDiscretionaryType(newLocationType) && !RealMovementOps::isHighType(newLocationType, a.hviHighMask)
+                && RandomGenerator::randomReal(1.0) < a.hviTilt) {
+                unsigned have = 0u;
+                for (unsigned q = a.locationOffsetPtr[i]; q < a.locationOffsetPtr[i + 1]; q++) {
+                    const unsigned t = a.possibleTypesPtr[q];
+                    if (RealMovementOps::isHighType(t, a.hviHighMask)) have |= (1u << t);
+                }
+                unsigned cnt = 0u;
+                for (unsigned t = 0; t < 32u; ++t) cnt += (have >> t) & 1u;
+                if (cnt > 0u) {
+                    unsigned pickT = RandomGenerator::randomUnsigned(cnt);
+                    for (unsigned t = 0; t < 32u; ++t) {
+                        if ((have >> t) & 1u) {
+                            if (pickT == 0u) {
+                                newLocationType = t;
+                                break;
+                            }
+                            pickT--;
+                        }
+                    }
+                }
+            }
+
+            // HVI occupational mobility: the working day is spent visiting a rotating set of shops and restaurants
+            bool rotatingPick = false;
+            unsigned rotatingLoc = std::numeric_limits<unsigned>::max();
+            if (a.hviRotatePtr != nullptr && a.hviRotatePtr[i] != 0 && newLocationType == a.workType
+                && ((a.hviStatesMask >> static_cast<unsigned>(wBState)) & 1u)) {
+                rotatingLoc = RealMovementOps::findRotatingLocation(i, a.locationOffsetPtr, a.possibleLocationsPtr, a.possibleTypesPtr);
+                if (rotatingLoc != std::numeric_limits<unsigned>::max()) {
+                    rotatingPick = true;
+                    newLocationType = a.locationTypePtr[rotatingLoc];
+                }
+            }
+            unsigned newLocation = rotatingPick ? rotatingLoc
+                                                : RealMovementOps::findActualLocationForType(i,
+                                                      newLocationType,
+                                                      a.locationOffsetPtr,
+                                                      a.possibleLocationsPtr,
+                                                      a.possibleTypesPtr,
+                                                      a.homeType,
+                                                      a.schoolType,
+                                                      a.workType,
+                                                      numPotentialEvents == 1,
+                                                      a.locationStatesPtr);
             // Check if location is open/closed. If closed, go home instead
             unsigned wasClosed = std::numeric_limits<unsigned>::max();
             bool schoolAndTooOld = (newLocationType == a.schoolType || newLocationType == a.classroomType)
@@ -801,6 +1001,43 @@ namespace RealMovementOps {
             }
 
             a.agentLocationsPtr[i] = newLocation;
+            if (a.rolePtr != nullptr)
+                a.rolePtr[i] = static_cast<uint8_t>(wasClosed != std::numeric_limits<unsigned>::max() ? a.homeType
+                                                    : (rotatingPick ? a.workType : newLocationType));
+            if (a.hviMultPtr != nullptr) {
+                // role-based: the event type is what is scaled; the physical venue may be of any type
+                const unsigned finalType = wasClosed == std::numeric_limits<unsigned>::max() ? newLocationType : 0xffffu;
+                const bool stateOk = ((a.hviStatesMask >> static_cast<unsigned>(wBState)) & 1u) != 0u;
+                const bool whenOk = !a.hviInfectiousOnly || a.agentStatesPtr[i].isInfectious();
+                if (rotatingPick && wasClosed == std::numeric_limits<unsigned>::max() && stateOk) {
+                    // 8 working hours become 1-hour visits to the rotating set
+                    unsigned total = basicDuration.getMinutes();
+                    unsigned visit = 60u;
+                    if (total > visit) {
+                        a.repeatLeftPtr[i] = static_cast<uint8_t>(MIN(total / visit - 1u, 254u));
+                        a.repeatTypePtr[i] = static_cast<uint8_t>(RealMovementOps::hviRotatingCode);
+                        a.repeatStepsPtr[i] = TimeDayDuration(visit).steps(a.timeStep);
+                        basicDuration = TimeDayDuration(visit);
+                    }
+                } else if (!rotatingPick && stateOk && whenOk && RealMovementOps::isDiscretionaryType(finalType)) {
+                    float u = a.hviLeverDuration ? a.hviMultPtr[i] : 1.0f;
+                    unsigned mins = basicDuration.getMinutes();
+                    if (u != 1.0f && mins > 0u) {
+                        unsigned nm = static_cast<unsigned>(lroundf(static_cast<float>(mins) * u));
+                        if (nm < a.timeStep) nm = a.timeStep;
+                        basicDuration = TimeDayDuration(nm);
+                        mins = nm;
+                    }
+                    if (a.hviVisitsFactor > 1u && a.hviClassPtr[i] != 0 && mins > 0u) {
+                        unsigned pv = mins / a.hviVisitsFactor;
+                        if (pv < a.timeStep) pv = a.timeStep;
+                        a.repeatLeftPtr[i] = static_cast<uint8_t>(a.hviVisitsFactor - 1u);
+                        a.repeatTypePtr[i] = static_cast<uint8_t>(finalType);
+                        a.repeatStepsPtr[i] = TimeDayDuration(pv).steps(a.timeStep);
+                        basicDuration = TimeDayDuration(pv);
+                    }
+                }
+            }
             if (basicDuration.getHours() > 24) {
                 a.stepsUntilMovePtr[i] = a.simTime.getStepsUntilMidnight(a.timeStep);
             } else if (activeEventsEnd == -1) {
@@ -894,6 +1131,7 @@ namespace RealMovementOps {
                     0,
                     nullptr);
                 a.agentLocationsPtr[i] = myPublicPlace;
+                if (a.rolePtr != nullptr) a.rolePtr[i] = static_cast<uint8_t>(a.publicPlaceType);
                 if (i == a.tracked)
                     printf(
                         "\tCase 3b- moving to public Place type 1 location %d "
@@ -913,6 +1151,7 @@ namespace RealMovementOps {
                     0,
                     nullptr);
                 a.agentLocationsPtr[i] = myHome;
+                if (a.rolePtr != nullptr) a.rolePtr[i] = static_cast<uint8_t>(a.homeType);
                 if (i == a.tracked)
                     printf(
                         "\tCase 3c- moving to home type 2 location %d for %d "
@@ -1379,6 +1618,76 @@ class RealMovement {
     unsigned work;
     std::string dumpLocationAgentList;
     std::string dumpLoctypeStat;
+    // High-velocity individuals
+    std::string hviMode = "off";
+    double hviShape = 0.0;
+    double hviClassFraction = 0.0;
+    double hviClassFactor = 1.0;
+    unsigned hviMinAge = 15;
+    std::string hviTypes = "4,5,6,7,8";
+    std::string hviStates = "WN";
+    std::string hviWhen = "always";
+    std::string hviLever = "chance";
+    std::string hviScaleByType = "";
+    std::string hviScaleByTypeWeekend = "";
+    unsigned hviVisitsFactor = 1;
+    double hviRotateFraction = 0.0;
+    unsigned long long hviSeed = 0;
+    unsigned hviControlDay = 0;
+    std::string hviControlMode = "none";
+    double hviControlParam = 1.0;
+    std::string hviDump = "";
+    std::string mobilityLog = "";
+    double hviTilt = 0.0;
+    std::string hviHighTypes = "5,6,9,10";
+    double hviOthersHighScale = 1.0;
+    unsigned hviIsolationBreak = 0;
+    bool hviInitialised = false;
+    bool hviControlApplied = false;
+    thrust::device_vector<float> hviMult;
+    thrust::device_vector<float> hviMultWeekend;
+    thrust::device_vector<uint8_t> hviClass;
+    thrust::device_vector<uint8_t> hviRotate;
+    thrust::device_vector<uint8_t> repeatLeft;
+    thrust::device_vector<uint8_t> repeatType;
+    thrust::device_vector<unsigned> repeatSteps;
+    // mobility log accumulators (host)
+    bool mobInitialised = false;
+    std::vector<unsigned> mobPrevLoc;
+    std::vector<unsigned> mobSteps;       // [agent][daytype 2][kind 2: role, physical][group 6]
+    std::vector<unsigned> mobMoves;       // [agent][daytype]
+    std::vector<unsigned> mobVisits;      // [agent][daytype] discretionary-role stays
+    std::vector<unsigned> mobTypeSteps;   // [agent][7] discretionary-role steps by physical location type 1,5,6,7,8,9,10
+    std::vector<unsigned> mobAllTypeSteps;// [agent][17] steps at venues of each physical type, whatever the role (types in hptTypes)
+    std::vector<uint8_t> mobPrevGroup;
+    std::vector<uint8_t> mobLocType;
+    std::vector<unsigned> mobStateDisc;   // [agent][wb 4] discretionary steps
+    std::vector<unsigned> mobStateInf;    // [agent][wb 4] infectious steps
+    std::vector<double> mobLsteps;        // discretionary steps weighted by location infectiousness
+    std::vector<unsigned> mobDistinctDay; // [agent][daytype] sum over days of distinct discretionary venues
+    std::vector<unsigned> mobDistinctWeek;// [agent] sum over weeks
+    std::vector<unsigned> mobWeeks;
+    std::vector<std::vector<unsigned>> mobVisitedDay, mobVisitedWeek;
+    std::vector<unsigned> mobDays;        // [daytype]
+    thrust::device_vector<uint8_t> agentRole;
+    std::vector<uint8_t> mobLocGroup;     // per location (physical type group)
+    std::vector<float> mobLocL;
+    unsigned mobLastDay = 0xffffffffu;
+
+    static int hptSlot(unsigned t) {
+        switch (t) {
+            case 1: return 0; case 2: return 1; case 3: return 2; case 4: return 3; case 5: return 4; case 6: return 5; case 7: return 6;
+            case 8: return 7; case 9: return 8; case 10: return 9; case 11: return 10; case 12: return 11; case 13: return 12;
+            case 14: return 13; case 22: return 14; case 33: return 15; case 44: return 16; default: return -1;
+        }
+    }
+
+    static std::uint64_t hviMix(std::uint64_t x) {
+        x += 0x9e3779b97f4a7c15ULL;
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+        return x ^ (x >> 31);
+    }
 
 public:
     bool enableCurfew = false;
@@ -1406,8 +1715,76 @@ public:
             cxxopts::value<std::string>()->default_value(""))
             ("dumpLoctypeStat",
             "Dump per-location type daily occupancy stats (filename)",
+            cxxopts::value<std::string>()->default_value(""))
+            ("hviMode",
+            "High-velocity individuals: off, gamma, lognormal or class. A persistent per-agent multiplier (mean 1 over eligible agents) on the duration of discretionary visits (location types 1,5,6,7,8,9,10)",
+            cxxopts::value<std::string>()->default_value("off"))
+            ("hviShape",
+            "Shape a of the gamma or lognormal multiplier (squared coefficient of variation 1/a)",
+            cxxopts::value<double>()->default_value("0"))
+            ("hviClassFraction",
+            "class mode: fraction f of eligible agents in the high-velocity class",
+            cxxopts::value<double>()->default_value("0"))
+            ("hviClassFactor",
+            "class mode: multiplier F of the class; the others are scaled so that the mean stays 1",
+            cxxopts::value<double>()->default_value("1"))
+            ("hviMinAge",
+            "Minimum age of eligible agents",
+            cxxopts::value<unsigned>()->default_value("15"))
+            ("hviTypes",
+            "Eligible agent types (1-based ids, comma separated)",
+            cxxopts::value<std::string>()->default_value("4,5,6,7,8"))
+            ("hviStates",
+            "Well-being states in which the multiplier acts, letters from W N M S",
+            cxxopts::value<std::string>()->default_value("WN"))
+            ("hviWhen",
+            "always, or infectious (the multiplier acts only while the agent is infectious)",
+            cxxopts::value<std::string>()->default_value("always"))
+            ("hviLever",
+            "Hours lever: chance (the multiplier scales discretionary chances against the home event within each window, per agent) or duration (it scales the duration of each discretionary stay)",
+            cxxopts::value<std::string>()->default_value("chance"))
+            ("hviScaleByType",
+            "Per agent type scale on the multiplier, id:scale pairs (1-based type ids), used to keep mean discretionary hours at baseline",
+            cxxopts::value<std::string>()->default_value(""))
+            ("hviScaleByTypeWeekend",
+            "As --hviScaleByType, for Saturday and Sunday (empty: the weekday scales)",
+            cxxopts::value<std::string>()->default_value(""))
+            ("hviVisitsFactor",
+            "Visits lever: class members split each discretionary stay into this many shorter visits at different venues of the same type (hours unchanged)",
+            cxxopts::value<unsigned>()->default_value("1"))
+            ("hviRotateFraction",
+            "Occupational mobility: this fraction of full-time workers (type 6) spend their working day in 1-hour visits to a rotating set of their own types 5, 7 and 8 venues",
+            cxxopts::value<double>()->default_value("0"))
+            ("hviSeed",
+            "Seed of the HVI draws (0 = the run seed)",
+            cxxopts::value<unsigned long long>()->default_value("0"))
+            ("hviTilt",
+            "Class members move this share of their low-L discretionary visits (types 1, 7, 8 and other non-high types) to the high-L types at the same duration (0 = off)",
+            cxxopts::value<double>()->default_value("0"))
+            ("hviHighTypes",
+            "Location types counted as high-L by --hviTilt and --hviOthersHighScale",
+            cxxopts::value<std::string>()->default_value("5,6,9,10"))
+            ("hviOthersHighScale",
+            "Agents outside the class multiply the chances of the high-L types by this factor; the difference goes to the home event (1 = off)",
+            cxxopts::value<double>()->default_value("1"))
+            ("hviIsolationBreak",
+            "1: class members keep their W schedule in the well-being states N and M (no staying at home when symptomatic)",
+            cxxopts::value<unsigned>()->default_value("0"))
+            ("hviControlDay",
+            "Day from which the control acts (0 = no control)",
+            cxxopts::value<unsigned>()->default_value("0"))
+            ("hviControlMode",
+            "none, capTop (the class or the most active fraction is set to multiplier 1) or scaleAll (all eligible multipliers are scaled)",
+            cxxopts::value<std::string>()->default_value("none"))
+            ("hviControlParam",
+            "capTop: fraction of eligible agents with the largest multiplier; scaleAll: scale factor",
+            cxxopts::value<double>()->default_value("1"))
+            ("hviDump",
+            "Write the multiplier of every agent to this CSV (agent,type,age,m,class,rotate)",
+            cxxopts::value<std::string>()->default_value(""))
+            ("mobilityLog",
+            "Write per-agent mobility summaries (moves, hours by place group, distinct venues) to this CSV, rewritten at the end of each day",
             cxxopts::value<std::string>()->default_value(""));
-            
     }
     void initializeArgs(const cxxopts::ParseResult& result) {
         tracked = result["trace"].as<unsigned>();
@@ -1415,6 +1792,49 @@ public:
         quarantineLength = result["quarantineLength"].as<unsigned>();
         dumpLocationAgentList = result["dumpLocationAgentList"].as<std::string>();
         dumpLoctypeStat = result["dumpLoctypeStat"].as<std::string>();
+        hviMode = result["hviMode"].as<std::string>();
+        hviShape = result["hviShape"].as<double>();
+        hviClassFraction = result["hviClassFraction"].as<double>();
+        hviClassFactor = result["hviClassFactor"].as<double>();
+        hviMinAge = result["hviMinAge"].as<unsigned>();
+        hviTypes = result["hviTypes"].as<std::string>();
+        hviStates = result["hviStates"].as<std::string>();
+        hviWhen = result["hviWhen"].as<std::string>();
+        hviLever = result["hviLever"].as<std::string>();
+        if (hviLever != "chance" && hviLever != "duration") throw CustomErrors("--hviLever must be chance or duration");
+        hviScaleByType = result["hviScaleByType"].as<std::string>();
+        hviScaleByTypeWeekend = result["hviScaleByTypeWeekend"].as<std::string>();
+        hviVisitsFactor = result["hviVisitsFactor"].as<unsigned>();
+        hviRotateFraction = result["hviRotateFraction"].as<double>();
+        hviSeed = result["hviSeed"].as<unsigned long long>();
+        hviControlDay = result["hviControlDay"].as<unsigned>();
+        hviControlMode = result["hviControlMode"].as<std::string>();
+        hviControlParam = result["hviControlParam"].as<double>();
+        hviDump = result["hviDump"].as<std::string>();
+        mobilityLog = result["mobilityLog"].as<std::string>();
+        hviTilt = result["hviTilt"].as<double>();
+        hviHighTypes = result["hviHighTypes"].as<std::string>();
+        hviOthersHighScale = result["hviOthersHighScale"].as<double>();
+        hviIsolationBreak = result["hviIsolationBreak"].as<unsigned>();
+        if (hviTilt < 0.0 || hviTilt > 1.0) throw CustomErrors("--hviTilt must be between 0 and 1");
+        if (!(hviOthersHighScale >= 0.0)) throw CustomErrors("--hviOthersHighScale must be at least 0");
+        if ((hviTilt > 0.0 || hviOthersHighScale != 1.0 || hviIsolationBreak != 0) && result["hviMode"].as<std::string>() != "class")
+            throw CustomErrors("--hviTilt, --hviOthersHighScale and --hviIsolationBreak need --hviMode class");
+        if (hviMode != "off" && hviMode != "gamma" && hviMode != "lognormal" && hviMode != "class")
+            throw CustomErrors("--hviMode must be off, gamma, lognormal or class");
+        if ((hviMode == "gamma" || hviMode == "lognormal") && !(hviShape > 0.0)) throw CustomErrors("--hviMode gamma/lognormal needs --hviShape > 0");
+        if (hviMode == "class" && !(hviClassFraction > 0.0 && hviClassFraction < 1.0 && hviClassFraction * hviClassFactor < 1.0))
+            throw CustomErrors("--hviMode class needs 0 < --hviClassFraction < 1 and fraction * factor < 1");
+        if ((hviMode != "off" || hviRotateFraction > 0.0) && result["traitShape"].as<double>() > 0.0)
+            throw CustomErrors("--hviMode cannot be combined with --traitShape (it can be combined with --sheddingShape, round 9)");
+        if (result["sheddingClassMean"].as<double>() > 0.0 && hviMode != "class")
+            throw CustomErrors("--sheddingClassMean needs --hviMode class");
+        if (hviWhen != "always" && hviWhen != "infectious") throw CustomErrors("--hviWhen must be always or infectious");
+        if (hviVisitsFactor < 1 || hviVisitsFactor > 16) throw CustomErrors("--hviVisitsFactor must be between 1 and 16");
+        if (hviControlMode != "none" && hviControlMode != "capTop" && hviControlMode != "scaleAll")
+            throw CustomErrors("--hviControlMode must be none, capTop or scaleAll");
+        if (hviMode == "off" && (hviRotateFraction <= 0.0) && (hviVisitsFactor > 1 || hviControlDay > 0))
+            throw CustomErrors("the HVI levers and control need --hviMode or --hviRotateFraction");
         if (dumpLocationAgentList.length()>0) Util::needAgentsSortedByLocation = 1;
     }
     void init(const parser::LocationTypes& data, unsigned cemeteryID) {
@@ -1450,6 +1870,289 @@ public:
         }
     }
 
+    [[nodiscard]] bool hviActive() const { return hviMode != "off" || hviRotateFraction > 0.0; }
+    // Class flags of every agent (empty when the class mode is off); used by the per-episode multiplier of round 10
+    thrust::host_vector<uint8_t> getHviClassFlags() {
+        initHvi();
+        thrust::host_vector<uint8_t> out;
+        if (hviMode == "class" && !hviClass.empty()) out = hviClass;
+        return out;
+    }
+
+    void initHvi() {
+        if (hviInitialised) return;
+        hviInitialised = true;
+        if (!hviActive() && mobilityLog.empty() && hviDump.empty()) return;
+        auto realThis = static_cast<SimulationType*>(this);
+        const std::size_t n = realThis->agents->PPValues.size();
+        thrust::host_vector<unsigned> types = realThis->agents->types;
+        thrust::host_vector<typename SimulationType::AgentMeta_t> meta = realThis->agents->agentMetaData;
+        std::vector<bool> eligibleType(64, false);
+        {
+            std::stringstream stream(hviTypes);
+            std::string item;
+            while (std::getline(stream, item, ',')) {
+                unsigned id = static_cast<unsigned>(std::stoul(item));
+                if (id >= 1 && id < 64) eligibleType[id - 1] = true;
+            }
+        }
+        std::vector<double> typeScale(64, 1.0);
+        std::vector<double> typeScaleWeekend(64, 1.0);
+        auto parseScales = [](const std::string& text, std::vector<double>& target) {
+            std::stringstream stream(text);
+            std::string item;
+            while (std::getline(stream, item, ',')) {
+                auto colon = item.find(':');
+                if (colon == std::string::npos) continue;
+                unsigned id = static_cast<unsigned>(std::stoul(item.substr(0, colon)));
+                if (id >= 1 && id < 64) target[id - 1] = std::stod(item.substr(colon + 1));
+            }
+        };
+        parseScales(hviScaleByType, typeScale);
+        if (hviScaleByTypeWeekend.empty()) typeScaleWeekend = typeScale;
+        else parseScales(hviScaleByTypeWeekend, typeScaleWeekend);
+        const std::uint64_t base = hviSeed != 0 ? static_cast<std::uint64_t>(hviSeed) : RandomGenerator::getBaseSeed();
+        std::vector<float> mult(n, 1.0f);
+        std::vector<float> multWeekend(n, 1.0f);
+        std::vector<uint8_t> cls(n, 0), rot(n, 0);
+        std::vector<double> raw(n, 1.0);
+        std::vector<char> eligible(n, 0);
+        double sum = 0.0;
+        std::size_t count = 0;
+        const double logVar = hviShape > 0.0 ? std::log(1.0 + 1.0 / hviShape) : 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!(types[i] < 64 && eligibleType[types[i]] && static_cast<unsigned>(meta[i].getAge()) >= hviMinAge)) continue;
+            eligible[i] = 1;
+            std::mt19937_64 generator(hviMix(base ^ 0x687669ULL) + hviMix(static_cast<std::uint64_t>(i) + 1ULL));
+            double value = 1.0;
+            if (hviMode == "gamma") {
+                std::gamma_distribution<double> dist(hviShape, 1.0 / hviShape);
+                value = dist(generator);
+            } else if (hviMode == "lognormal") {
+                std::lognormal_distribution<double> dist(-0.5 * logVar, std::sqrt(logVar));
+                value = dist(generator);
+            } else if (hviMode == "class") {
+                std::uniform_real_distribution<double> unit(0.0, 1.0);
+                const bool inClass = unit(generator) < hviClassFraction;
+                value = inClass ? hviClassFactor : (1.0 - hviClassFraction * hviClassFactor) / (1.0 - hviClassFraction);
+                cls[i] = inClass ? 1 : 0;
+            }
+            raw[i] = value;
+            sum += value;
+            ++count;
+        }
+        const double mean = count > 0 ? sum / static_cast<double>(count) : 1.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!eligible[i]) continue;
+            double m = raw[i] / mean;
+            if (hviMode != "class" && m > 1.0) cls[i] = 1;
+            mult[i] = static_cast<float>(m * typeScale[types[i]]);
+            multWeekend[i] = static_cast<float>(m * typeScaleWeekend[types[i]]);
+        }
+        if (hviRotateFraction > 0.0) {
+            for (std::size_t i = 0; i < n; ++i) {
+                if (types[i] != 5) continue;  // type id 6, full-time worker (0-based 5)
+                std::mt19937_64 generator(hviMix(base ^ 0x726f74ULL) + hviMix(static_cast<std::uint64_t>(i) + 1ULL));
+                std::uniform_real_distribution<double> unit(0.0, 1.0);
+                if (unit(generator) < hviRotateFraction) rot[i] = 1;
+            }
+        }
+        hviMult = mult;
+        hviMultWeekend = multWeekend;
+        hviClass = cls;
+        hviRotate = rot;
+        repeatLeft.assign(n, 0);
+        repeatType.assign(n, 0);
+        repeatSteps.assign(n, 0);
+        if (!hviDump.empty()) {
+            std::ofstream out(hviDump.c_str());
+            out << "agent,type,age,m,class,rotate,m_weekend\n";
+            out.precision(9);
+            for (std::size_t i = 0; i < n; ++i)
+                out << i << ',' << (types[i] + 1) << ',' << static_cast<unsigned>(meta[i].getAge()) << ',' << mult[i] << ','
+                    << static_cast<unsigned>(cls[i]) << ',' << static_cast<unsigned>(rot[i]) << ',' << multWeekend[i] << '\n';
+        }
+    }
+
+    void applyHviControl(Timehandler& simTime) {
+        if (hviControlDay == 0 || hviControlApplied || hviControlMode == "none" || hviMult.empty()) return;
+        const unsigned day = simTime.getTimestamp() / simTime.getStepsPerDay();
+        if (day < hviControlDay) return;
+        hviControlApplied = true;
+        thrust::host_vector<float> mult = hviMult;
+        thrust::host_vector<float> multWE = hviMultWeekend;
+        thrust::host_vector<uint8_t> cls = hviClass;
+        if (hviControlMode == "scaleAll") {
+            for (std::size_t i = 0; i < multWE.size(); ++i)
+                if (multWE[i] != 1.0f || cls[i]) multWE[i] = static_cast<float>(multWE[i] * hviControlParam);
+            for (std::size_t i = 0; i < mult.size(); ++i)
+                if (mult[i] != 1.0f || cls[i]) mult[i] = static_cast<float>(mult[i] * hviControlParam);
+        } else {
+            // capTop: the hviControlParam fraction of eligible agents with the largest multiplier gets multiplier 1
+            std::vector<float> values;
+            for (std::size_t i = 0; i < mult.size(); ++i)
+                if (cls[i] || mult[i] != 1.0f) values.push_back(mult[i]);
+            if (!values.empty()) {
+                std::sort(values.begin(), values.end());
+                const std::size_t cut = static_cast<std::size_t>(std::floor((1.0 - hviControlParam) * values.size()));
+                const float threshold = values[std::min(cut, values.size() - 1)];
+                for (std::size_t i = 0; i < mult.size(); ++i)
+                    if ((cls[i] || mult[i] != 1.0f) && mult[i] >= threshold && mult[i] > 1.0f) {
+                        mult[i] = 1.0f;
+                        multWE[i] = 1.0f;
+                    }
+            }
+        }
+        hviMult = mult;
+        hviMultWeekend = multWE;
+    }
+
+    // ---- per-agent mobility log -------------------------------------------------------------------------------
+    // group: 0 home, 1 school, 2 work, 3 discretionary, 4 hospital and institutions, 5 other
+    void mobilityStep(Timehandler& simTime) {
+        if (mobilityLog.empty()) return;
+        auto realThis = static_cast<SimulationType*>(this);
+        const std::size_t n = realThis->agents->PPValues.size();
+        if (!mobInitialised) {
+            mobInitialised = true;
+            thrust::host_vector<typename SimulationType::TypeOfLocation_t> lt = realThis->locs->locType;
+            thrust::host_vector<float> li = realThis->locs->infectiousness;
+            mobLocGroup.assign(lt.size() + 1, 5);
+            mobLocL.assign(lt.size() + 1, 0.0f);
+            for (std::size_t j = 0; j < lt.size(); ++j) {
+                unsigned t = static_cast<unsigned>(lt[j]);
+                uint8_t g = 5;
+                if (t == home) g = 0;
+                else if (t == school || t == classroom) g = 1;
+                else if (t == work || t == 13 || t == 44) g = 2;
+                else if (RealMovementOps::isDiscretionaryType(t)) g = 3;
+                else if (t == 12 || t == 14 || t == 22) g = 4;
+                mobLocGroup[j] = g;
+                mobLocL[j] = j < li.size() ? li[j] : 0.0f;
+            }
+            mobPrevLoc.assign(n, 0xffffffffu);
+            mobSteps.assign(n * 24, 0);
+            mobMoves.assign(n * 2, 0);
+            mobVisits.assign(n * 2, 0);
+            mobTypeSteps.assign(n * 7, 0);
+            mobAllTypeSteps.assign(n * 17, 0);
+            mobLocType.assign(lt.size() + 1, 255);
+            for (std::size_t j = 0; j < lt.size(); ++j) mobLocType[j] = static_cast<uint8_t>(std::min<unsigned>(static_cast<unsigned>(lt[j]), 254u));
+            mobPrevGroup.assign(n, 255);
+            mobStateDisc.assign(n * 4, 0);
+            mobStateInf.assign(n * 4, 0);
+            mobLsteps.assign(n, 0.0);
+            mobDistinctDay.assign(n * 2, 0);
+            mobDistinctWeek.assign(n, 0);
+            mobWeeks.assign(n, 0);
+            mobVisitedDay.assign(n, {});
+            mobVisitedWeek.assign(n, {});
+            mobDays.assign(2, 0);
+        }
+        const unsigned stepsPerDay = simTime.getStepsPerDay();
+        const unsigned timestamp = simTime.getTimestamp();
+        const unsigned day = timestamp / stepsPerDay;
+        const bool weekend = (static_cast<unsigned>(simTime.getDay()) >= 5);
+        const unsigned dt = weekend ? 1 : 0;
+        thrust::host_vector<unsigned> loc = realThis->agents->location;
+        thrust::device_vector<uint8_t> codeDev(n);
+        thrust::transform(realThis->agents->PPValues.begin(), realThis->agents->PPValues.end(), codeDev.begin(),
+            [] HD(const typename SimulationType::PPState_t& p) -> uint8_t {
+                return static_cast<uint8_t>(static_cast<unsigned>(p.getWBState()) | (p.isInfectious() ? 8u : 0u));
+            });
+        thrust::host_vector<uint8_t> code = codeDev;
+        thrust::host_vector<uint8_t> roleHost = agentRole;
+        for (std::size_t i = 0; i < n; ++i) {
+            unsigned c = code[i];
+            unsigned wb = c & 7u;
+            if (wb >= 4) continue;  // dead
+            unsigned l = loc[i];
+            if (l >= mobLocGroup.size()) continue;
+            unsigned pg = mobLocGroup[l];
+            unsigned role = roleHost[i];
+            unsigned g = 5;
+            if (role == home) g = 0;
+            else if (role == school || role == classroom) g = 1;
+            else if (role == work || role == 13) g = 2;
+            else if (RealMovementOps::isDiscretionaryType(role)) g = 3;
+            else if (role == 12 || role == 14 || role == 22) g = 4;
+            {
+                const int hs = hptSlot(mobLocType[l]);
+                if (hs >= 0) mobAllTypeSteps[i * 17 + hs]++;
+            }
+            mobSteps[i * 24 + dt * 12 + g]++;
+            mobSteps[i * 24 + dt * 12 + 6 + pg]++;
+            if (g == 3) {
+                mobStateDisc[i * 4 + wb]++;
+                mobLsteps[i] += mobLocL[l];
+                const unsigned pt = mobLocType[l];
+                const int slot = pt == 1 ? 0 : pt == 5 ? 1 : pt == 6 ? 2 : pt == 7 ? 3 : pt == 8 ? 4 : pt == 9 ? 5 : pt == 10 ? 6 : -1;
+                if (slot >= 0) mobTypeSteps[i * 7 + slot]++;
+            }
+            if (c & 8u) mobStateInf[i * 4 + wb]++;
+            if (g == 3 && (l != mobPrevLoc[i] || mobPrevGroup[i] != 3)) mobVisits[i * 2 + dt]++;
+            mobPrevGroup[i] = static_cast<uint8_t>(g);
+            if (l != mobPrevLoc[i]) {
+                if (mobPrevLoc[i] != 0xffffffffu) mobMoves[i * 2 + dt]++;
+                if (g == 3) {
+                    auto& vd = mobVisitedDay[i];
+                    if (std::find(vd.begin(), vd.end(), l) == vd.end()) vd.push_back(l);
+                    auto& vw = mobVisitedWeek[i];
+                    if (std::find(vw.begin(), vw.end(), l) == vw.end()) vw.push_back(l);
+                }
+                mobPrevLoc[i] = l;
+            }
+        }
+        if (simTime.getStepsUntilMidnight() == 1) {
+            mobDays[dt]++;
+            for (std::size_t i = 0; i < n; ++i) {
+                mobDistinctDay[i * 2 + dt] += static_cast<unsigned>(mobVisitedDay[i].size());
+                mobVisitedDay[i].clear();
+            }
+            if (static_cast<unsigned>(simTime.getDay()) == 6) {
+                for (std::size_t i = 0; i < n; ++i) {
+                    mobDistinctWeek[i] += static_cast<unsigned>(mobVisitedWeek[i].size());
+                    mobWeeks[i]++;
+                    mobVisitedWeek[i].clear();
+                }
+            }
+            writeMobilityLog(simTime);
+        }
+        (void)day;
+    }
+
+    void writeMobilityLog(Timehandler& simTime) {
+        auto realThis = static_cast<SimulationType*>(this);
+        const std::size_t n = realThis->agents->PPValues.size();
+        thrust::host_vector<unsigned> types = realThis->agents->types;
+        thrust::host_vector<typename SimulationType::AgentMeta_t> meta = realThis->agents->agentMetaData;
+        thrust::host_vector<float> mult;
+        if (!hviMult.empty()) mult = hviMult;
+        std::ofstream out(mobilityLog.c_str());
+        const double hoursPerStep = static_cast<double>(simTime.getTimeStep()) / 60.0;
+        out << "agent,type,age,m,days_weekday,days_weekend,moves_weekday,moves_weekend,visits_wd,visits_we";
+        const char* groups[6] = {"home", "school", "work", "disc", "inst", "other"};
+        for (int d = 0; d < 2; ++d)
+            for (int k = 0; k < 2; ++k)
+                for (int g = 0; g < 6; ++g) out << ",h_" << (d == 0 ? "wd_" : "we_") << (k == 0 ? "role_" : "phys_") << groups[g];
+        out << ",Lhours_disc,hdisc_W,hdisc_N,hdisc_M,hdisc_S,hinf_W,hinf_N,hinf_M,hinf_S,distinct_day_wd,distinct_day_we,distinct_week,hdt_1,hdt_5,hdt_6,hdt_7,hdt_8,hdt_9,hdt_10,hpt_1,hpt_2,hpt_3,hpt_4,hpt_5,hpt_6,hpt_7,hpt_8,hpt_9,hpt_10,hpt_11,hpt_12,hpt_13,hpt_14,hpt_22,hpt_33,hpt_44\n";
+        out.precision(6);
+        for (std::size_t i = 0; i < n; ++i) {
+            out << i << ',' << (types[i] + 1) << ',' << static_cast<unsigned>(meta[i].getAge()) << ',' << (mult.empty() ? 1.0f : mult[i]) << ','
+                << mobDays[0] << ',' << mobDays[1] << ',' << mobMoves[i * 2] << ',' << mobMoves[i * 2 + 1] << ',' << mobVisits[i * 2] << ',' << mobVisits[i * 2 + 1];
+            for (int k = 0; k < 24; ++k) out << ',' << mobSteps[i * 24 + k] * hoursPerStep;
+            out << ',' << mobLsteps[i] * hoursPerStep;
+            for (int w = 0; w < 4; ++w) out << ',' << mobStateDisc[i * 4 + w] * hoursPerStep;
+            for (int w = 0; w < 4; ++w) out << ',' << mobStateInf[i * 4 + w] * hoursPerStep;
+            out << ',' << (mobDays[0] ? static_cast<double>(mobDistinctDay[i * 2]) / mobDays[0] : 0.0) << ','
+                << (mobDays[1] ? static_cast<double>(mobDistinctDay[i * 2 + 1]) / mobDays[1] : 0.0) << ','
+                << (mobWeeks[i] ? static_cast<double>(mobDistinctWeek[i]) / mobWeeks[i] : 0.0);
+            for (int k = 0; k < 7; ++k) out << ',' << mobTypeSteps[i * 7 + k] * hoursPerStep;
+            for (int k = 0; k < 17; ++k) out << ',' << mobAllTypeSteps[i * 17 + k] * hoursPerStep;
+            out << '\n';
+        }
+    }
+
     void planLocations(Timehandler simTime, unsigned timeStep) {
         PROFILE_FUNCTION();
         auto realThis = static_cast<SimulationType*>(this);
@@ -1470,6 +2173,8 @@ public:
         // If curfew, noone moves before curfew ends
         thrust::fill(stepsUntilMove.begin(), stepsUntilMove.end(), curfewEnd);
         thrust::fill(realThis->agents->stayedHome.begin(), realThis->agents->stayedHome.end(), true);
+        initHvi();
+        if (!repeatLeft.empty()) thrust::fill(repeatLeft.begin(), repeatLeft.end(), (uint8_t)0u);
 
         // For each agent that is under 14 years, check if quarantined or school closed, if so flag home as noWork
         thrust::fill(noWorkLoc.begin(), noWorkLoc.end(), RealMovementOps::noWorkNoRequest);
@@ -1684,6 +2389,45 @@ public:
         a.schoolAgeRestriction = schoolAgeRestriction;
         a.quarantineImmuneActive = quarantineImmuneActive;
         a.lockdownNonvaccActive = lockdownNonvaccActive;
+        initHvi();
+        applyHviControl(simTime);
+        if (hviActive() && !hviMult.empty()) {
+            a.hviMultPtr = (static_cast<unsigned>(simTime.getDay()) >= 5 || holidayModeActive) ? thrust::raw_pointer_cast(hviMultWeekend.data())
+                                                                                            : thrust::raw_pointer_cast(hviMult.data());
+            a.hviClassPtr = thrust::raw_pointer_cast(hviClass.data());
+            a.hviRotatePtr = hviRotateFraction > 0.0 ? thrust::raw_pointer_cast(hviRotate.data()) : nullptr;
+            a.repeatLeftPtr = thrust::raw_pointer_cast(repeatLeft.data());
+            a.repeatTypePtr = thrust::raw_pointer_cast(repeatType.data());
+            a.repeatStepsPtr = thrust::raw_pointer_cast(repeatSteps.data());
+            unsigned mask = 0;
+            for (char ch : hviStates) {
+                if (ch == 'W') mask |= 1u;
+                else if (ch == 'N') mask |= 2u;
+                else if (ch == 'M') mask |= 4u;
+                else if (ch == 'S') mask |= 8u;
+            }
+            a.hviStatesMask = mask;
+            a.hviInfectiousOnly = (hviWhen == "infectious");
+            a.hviVisitsFactor = hviVisitsFactor;
+            a.hviLeverDuration = (hviLever == "duration");
+            a.hviTilt = static_cast<float>(hviTilt);
+            unsigned highMask = 0;
+            {
+                std::stringstream stream(hviHighTypes);
+                std::string item;
+                while (std::getline(stream, item, ',')) {
+                    unsigned id = static_cast<unsigned>(std::stoul(item));
+                    if (id < 32) highMask |= (1u << id);
+                }
+            }
+            a.hviHighMask = highMask;
+            a.hviOthersHighScale = static_cast<float>(hviOthersHighScale);
+            a.hviIsolationBreak = hviIsolationBreak != 0;
+        }
+        if (!mobilityLog.empty()) {
+            if (agentRole.empty()) agentRole.assign(realThis->agents->PPValues.size(), static_cast<uint8_t>(home));
+            a.rolePtr = thrust::raw_pointer_cast(agentRole.data());
+        }
 
         // Location-based data
         thrust::device_vector<unsigned>& locationAgentList = realThis->locs->locationAgentList;
@@ -1756,6 +2500,7 @@ public:
         cudaDeviceSynchronize();
 #endif
         Util::updatePerLocationAgentLists(agentLocations, locationIdsOfAgents, locationAgentList, locationListOffsets);
+        mobilityStep(simTime);
 
         if (dumpLocationAgentList.length()>0) {
             std::ofstream file;

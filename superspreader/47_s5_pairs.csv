@@ -1,0 +1,2 @@
+arm,replicates,pairs,pearson,pearson_low,pearson_high,spearman,spearman_low,spearman_high,reference_persistent_trait_pearson_R6_2
+s1_a0.3 persistent HVI,8,11820,0.0404896,0.0226325,0.0577531,0.0265879,0.00971599,0.0417302,0.5436

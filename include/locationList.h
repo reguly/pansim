@@ -110,7 +110,8 @@ public:
         double sheddingShape,
         const float* traitInfectiousness = nullptr,
         const float* traitSusceptibility = nullptr,
-        bool peakMode = false) {
+        bool peakMode = false,
+        const float* sheddingMean = nullptr) {
         //        PROFILE_FUNCTION();
         auto& ppstates = SimulationType::AgentListType::getInstance()->PPValues;
         auto& agentStats = SimulationType::AgentListType::getInstance()->agentStats;
@@ -138,7 +139,7 @@ public:
                 thrust::make_counting_iterator<unsigned>(0) + ppstates.size(),
                 thrust::make_permutation_iterator(infectionAtLocation.begin(), agentLocations.end()),
                 newlyInfectedAgents.begin() + ppstates.size())),
-            [timestamp, tracked2, flagInfectionsAtLocation, variant, sheddingShape, traitInfectiousness, traitSusceptibility, peakMode] HD(thrust::tuple<typename SimulationType::PPState_t&,
+            [timestamp, tracked2, flagInfectionsAtLocation, variant, sheddingShape, traitInfectiousness, traitSusceptibility, peakMode, sheddingMean] HD(thrust::tuple<typename SimulationType::PPState_t&,
                 float&,
                 TypeOfLocation&,
                 AgentStats&,
@@ -167,6 +168,7 @@ public:
                         shed = traitInfectiousness[agentID];
                     } else {
                         shed = sheddingShape > 0.0 ? static_cast<float>(RandomGenerator::gammaMeanOne(sheddingShape)) : 1.0f;
+                        if (sheddingMean != nullptr) shed *= sheddingMean[agentID];
                     }
                     ppstate.setShedMultiplier(peakMode ? 1.0f : shed);
                     agentStat.shedMultiplier = shed;

@@ -27,6 +27,10 @@ private:
     bool flagInfectionAtLocations = false;
     std::string dumpDirectory = "";
     double sheddingShape = 0.0;
+    double sheddingClassMean = 0.0;   // round 10: mean of the per-episode multiplier of HVI class members (0 = off)
+    double sheddingOthersMean = 1.0;  // mean of the per-episode multiplier of everybody else when the class mean is set
+    bool sheddingMeanBuilt = false;
+    thrust::device_vector<float> sheddingMean;
     double traitShape = 0.0;
     std::string traitDist = "gamma";
     unsigned traitPersist = 1;
@@ -46,6 +50,20 @@ private:
     int profileAppliedDay = -1;
     double densityExponent = 1.0;
     std::string infectionTracePath = "";
+    std::string episodeTracePath = "";
+    std::ofstream episodeTraceStream;
+    unsigned eventGroupSize = 0;
+    double eventDurationHours = 2.0;
+    std::string eventGroupLogPath = "";
+    std::ofstream eventGroupStream;
+    std::ofstream eventGroupInfectionStream;
+    struct GroupEvent {
+        unsigned location;
+        unsigned startStep;
+    };
+    std::vector<GroupEvent> groupEventsToday;
+    std::size_t groupEventCursor = 0;
+    int groupEventDay = -1;
     std::string occupancyStatsPath = "";
     std::string volumeModelMode = "off";
     std::string volumeTypeFactors = "";
@@ -159,6 +177,12 @@ public:
             ("sheddingShape",
             "Gamma shape of a per-infection shedding multiplier with mean 1. <=0 disables it",
             cxxopts::value<double>()->default_value("0"))
+            ("sheddingClassMean",
+            "Round 10: mean of the per-episode shedding multiplier of HVI class members (the shape stays --sheddingShape). 0 disables it; needs --hviMode class and --sheddingShape",
+            cxxopts::value<double>()->default_value("0"))
+            ("sheddingOthersMean",
+            "Round 10: mean of the per-episode shedding multiplier of agents outside the class when --sheddingClassMean is set",
+            cxxopts::value<double>()->default_value("1"))
             ("traitShape",
             "Shape of a persistent per-agent infectiousness trait with mean 1 (gamma CV2 = 1/shape, lognormal likewise). <=0 disables it",
             cxxopts::value<double>()->default_value("0"))
@@ -202,6 +226,9 @@ public:
             ("infectionTrace",
             "Write one row per infection (agent, infector, place, time) to this TSV path",
             cxxopts::value<std::string>()->default_value(""))
+            ("episodeTrace",
+            "Write one row per infection episode, at the time of infection, to this TSV path. Unlike --infectionTrace it keeps every episode of a reinfected agent",
+            cxxopts::value<std::string>()->default_value(""))
             ("venueProfile",
             "Location-type transmission profile: off, covid, or caregiving",
             cxxopts::value<std::string>()->default_value("off"))
@@ -226,12 +253,35 @@ public:
             ("eventLog",
             "Write one row per amplification event (day, location, type, peak presence)",
             cxxopts::value<std::string>()->default_value(""))
+            ("eventGroupSize",
+            "If positive, events are closed-group events: a group of at most this many agents, drawn from those present when the event starts, is exposed for --eventDurationHours. The venue-day boost is not applied",
+            cxxopts::value<unsigned>()->default_value("0"))
+            ("eventDurationHours",
+            "Duration in hours of a closed-group event",
+            cxxopts::value<double>()->default_value("2"))
+            ("eventGroupLog",
+            "Write one row per closed-group event to this TSV path, and the infected attendees to <path>.infections",
+            cxxopts::value<std::string>()->default_value(""))
             ("homeVenueFactor",
             "If non-negative, replace the venue-profile base factor of type 2 (home)",
             cxxopts::value<double>()->default_value("-1"));
     }
 
     [[nodiscard]] double getSheddingShape() const { return sheddingShape; }
+    // Per-agent mean of the per-episode multiplier (class members and others), built once from the HVI class flags; null when off
+    [[nodiscard]] const float* getSheddingMeanPtr() {
+        if (!(sheddingClassMean > 0.0)) return nullptr;
+        if (!sheddingMeanBuilt) {
+            sheddingMeanBuilt = true;
+            auto realThis = static_cast<SimulationType*>(this);
+            thrust::host_vector<uint8_t> cls = realThis->getHviClassFlags();
+            if (cls.empty()) throw CustomErrors("--sheddingClassMean needs --hviMode class");
+            thrust::host_vector<float> h(cls.size());
+            for (std::size_t i = 0; i < cls.size(); ++i) h[i] = static_cast<float>(cls[i] ? sheddingClassMean : sheddingOthersMean);
+            sheddingMean = h;
+        }
+        return thrust::raw_pointer_cast(sheddingMean.data());
+    }
     [[nodiscard]] const float* getTraitInfectiousnessPtr() const {
         return traitInfectiousness.empty() ? nullptr : thrust::raw_pointer_cast(traitInfectiousness.data());
     }
@@ -290,6 +340,10 @@ protected:
         trunc = result["trunc"].as<double>();
         flagInfectionAtLocations = (dumpDirectory == "") ? false : true;
         sheddingShape = result["sheddingShape"].as<double>();
+        sheddingClassMean = result["sheddingClassMean"].as<double>();
+        sheddingOthersMean = result["sheddingOthersMean"].as<double>();
+        if (sheddingClassMean < 0.0 || !(sheddingOthersMean > 0.0)) throw CustomErrors("--sheddingClassMean must be at least 0 and --sheddingOthersMean positive");
+        if (sheddingClassMean > 0.0 && !(sheddingShape > 0.0)) throw CustomErrors("--sheddingClassMean needs --sheddingShape > 0");
         traitShape = result["traitShape"].as<double>();
         traitDist = result["traitDist"].as<std::string>();
         traitPersist = result["traitPersist"].as<unsigned>();
@@ -300,13 +354,17 @@ protected:
         validateTraitOptions(result["sheddingPeakWindow"].as<std::string>());
         densityExponent = result["densityExponent"].as<double>();
         infectionTracePath = result["infectionTrace"].as<std::string>();
+        episodeTracePath = result["episodeTrace"].as<std::string>();
+        eventGroupSize = result["eventGroupSize"].as<unsigned>();
+        eventDurationHours = result["eventDurationHours"].as<double>();
+        eventGroupLogPath = result["eventGroupLog"].as<std::string>();
         occupancyStatsPath = result["occupancyStats"].as<std::string>();
         eventLogPath = result["eventLog"].as<std::string>();
         volumeModelMode = result["volumeModel"].as<std::string>();
         volumeTypeFactors = result["volumeTypeFactors"].as<std::string>();
         volumeHomeType = result["volumeHomeType"].as<unsigned>();
         if (flagInfectionAtLocations) dumpstore = new DumpStore();
-        if (dumpToFile || flagInfectionAtLocations || !infectionTracePath.empty() || !occupancyStatsPath.empty()
+        if (dumpToFile || flagInfectionAtLocations || !infectionTracePath.empty() || !episodeTracePath.empty() || !occupancyStatsPath.empty()
             || volumeModelMode != "off")
             Util::needAgentsSortedByLocation = 1;
     }
@@ -737,6 +795,7 @@ public:
         double shape = sheddingShape;
         const bool peak = peakMode;
         const float* traitPtr = getTraitInfectiousnessPtr();
+        const float* meanPtr = getSheddingMeanPtr();
         const unsigned unknownTime = 0xffffffffu;
         thrust::for_each(thrust::make_zip_iterator(thrust::make_tuple(realThis->agents->PPValues.begin(),
                              realThis->agents->agentStats.begin(),
@@ -746,7 +805,7 @@ public:
                 realThis->agents->agentStats.end(),
                 realThis->agents->location.end(),
                 thrust::make_counting_iterator<unsigned>(0) + realThis->agents->PPValues.size())),
-            [shape, unknownTime, traitPtr, peak] HD(thrust::tuple<typename SimulationType::PPState_t&, AgentStats&, unsigned&, unsigned> tup) {
+            [shape, unknownTime, traitPtr, peak, meanPtr] HD(thrust::tuple<typename SimulationType::PPState_t&, AgentStats&, unsigned&, unsigned> tup) {
                 auto& state = thrust::get<0>(tup);
                 auto& stat = thrust::get<1>(tup);
                 unsigned place = thrust::get<2>(tup);
@@ -761,6 +820,7 @@ public:
                     multiplier = traitPtr[agentID];
                 } else if (shape > 0.0) {
                     multiplier = static_cast<float>(RandomGenerator::gammaMeanOne(shape));
+                    if (meanPtr != nullptr) multiplier *= meanPtr[agentID];
                 } else {
                     return;
                 }
@@ -859,6 +919,42 @@ public:
                 stats[agent].infectedOccupancy = offsets[place + 1] - offsets[place];
                 stats[agent].infectiousPresent = total;
             });
+    }
+
+    void writeEpisodes() {
+        auto realThis = static_cast<SimulationType*>(this);
+        const unsigned nAgents = static_cast<unsigned>(realThis->agents->PPValues.size());
+        thrust::device_vector<unsigned> ids(nAgents);
+        auto last = thrust::copy_if(thrust::make_counting_iterator<unsigned>(0),
+            thrust::make_counting_iterator<unsigned>(nAgents),
+            newlyInfectedAgents.begin(),
+            ids.begin(),
+            [] HD(unsigned flag) { return flag != 0u; });
+        const unsigned count = static_cast<unsigned>(last - ids.begin());
+        if (count == 0) return;
+        if (!episodeTraceStream.is_open()) {
+            episodeTraceStream.open(episodeTracePath.c_str());
+            if (!episodeTraceStream) {
+                std::cerr << "Could not write episode trace " << episodeTracePath << "\n";
+                episodeTracePath.clear();
+                return;
+            }
+            episodeTraceStream << "agent\tepisode\tinfector\tinfectorTimestamp\tlocation\tlocType\ttimestamp\tshed\tinfectorShed\t"
+                                  "occupancy\tinfectiousPresent\n";
+        }
+        thrust::host_vector<unsigned> hostIds(ids.begin(), ids.begin() + count);
+        for (unsigned i = 0; i < count; ++i) {
+            const unsigned agent = hostIds[i];
+            AgentStats stat = realThis->agents->agentStats[agent];
+            const unsigned place = stat.infectedLocation;
+            unsigned locType = 0u;
+            if (place < realThis->locs->locType.size()) locType = static_cast<unsigned>(realThis->locs->locType[place]);
+            episodeTraceStream << agent << '\t' << static_cast<unsigned>(stat.infectedCount) << '\t' << stat.infectorId << '\t'
+                               << stat.infectorInfectedTimestamp << '\t' << place << '\t' << locType << '\t'
+                               << stat.infectedTimestamp << '\t' << stat.shedMultiplier << '\t' << stat.infectorShed << '\t'
+                               << stat.infectedOccupancy << '\t' << stat.infectiousPresent << '\n';
+        }
+        episodeTraceStream.flush();
     }
 
     void initialiseVolumeModel() {
@@ -1019,6 +1115,210 @@ public:
         }
     }
 
+    void prepareGroupEvents(Timehandler& simTime) {
+        auto realThis = static_cast<SimulationType*>(this);
+        const unsigned stepsPerDay = simTime.getStepsPerDay();
+        const int day = static_cast<int>(simTime.getTimestamp() / stepsPerDay);
+        if (groupEventDay == day) return;
+        groupEventDay = day;
+        groupEventsToday.clear();
+        groupEventCursor = 0;
+        thrust::host_vector<float> boost = realThis->locs->eventBoost;
+        std::mt19937_64 generator(mixBits(RandomGenerator::getBaseSeed() ^ 0x6576656e7473ULL) + mixBits(static_cast<std::uint64_t>(day) + 1ULL));
+        const unsigned stepsPerHour = stepsPerDay / 24;
+        const unsigned first = 10 * stepsPerHour;
+        const unsigned last = 20 * stepsPerHour;
+        for (unsigned loc = 0; loc < boost.size(); ++loc) {
+            if (!(boost[loc] > 1.0f)) continue;
+            groupEventsToday.push_back({loc, first + static_cast<unsigned>(generator() % (last - first))});
+        }
+        std::sort(groupEventsToday.begin(), groupEventsToday.end(), [](const GroupEvent& a, const GroupEvent& b) {
+            return a.startStep != b.startStep ? a.startStep < b.startStep : a.location < b.location;
+        });
+        // The venue-day boost is not used in closed-group mode.
+        thrust::fill(realThis->locs->eventBoost.begin(), realThis->locs->eventBoost.end(), 1.0f);
+    }
+
+    void runGroupEvents(Timehandler& simTime, unsigned timeStep, uint8_t variant) {
+        if (groupEventCursor >= groupEventsToday.size()) return;
+        auto realThis = static_cast<SimulationType*>(this);
+        const unsigned stepsPerDay = simTime.getStepsPerDay();
+        const unsigned timestamp = simTime.getTimestamp();
+        const unsigned stepOfDay = timestamp % stepsPerDay;
+        std::vector<unsigned> starting;
+        while (groupEventCursor < groupEventsToday.size() && groupEventsToday[groupEventCursor].startStep < stepOfDay) ++groupEventCursor;
+        while (groupEventCursor < groupEventsToday.size() && groupEventsToday[groupEventCursor].startStep == stepOfDay) {
+            starting.push_back(groupEventsToday[groupEventCursor].location);
+            ++groupEventCursor;
+        }
+        if (starting.empty()) return;
+        const int day = static_cast<int>(timestamp / stepsPerDay);
+        auto& ppstates = realThis->agents->PPValues;
+        const std::size_t n = ppstates.size();
+        thrust::device_vector<float> infectiousDevice(n), susceptibleDevice(n);
+        thrust::transform(ppstates.begin(), ppstates.end(), infectiousDevice.begin(),
+            [variant] HD(const typename SimulationType::PPState_t& ppstate) -> float { return ppstate.isInfectious(variant); });
+        thrust::transform(ppstates.begin(), ppstates.end(), susceptibleDevice.begin(),
+            [variant] HD(const typename SimulationType::PPState_t& ppstate) -> float { return ppstate.getSusceptible(variant); });
+        thrust::host_vector<float> infectious = infectiousDevice;
+        thrust::host_vector<float> susceptible = susceptibleDevice;
+        thrust::host_vector<unsigned> offsets = realThis->locs->locationListOffsets;
+        thrust::host_vector<unsigned> people = realThis->locs->locationAgentList;
+        thrust::host_vector<float> locationInfectiousness = realThis->locs->infectiousness;
+        thrust::host_vector<typename SimulationType::TypeOfLocation_t> locTypes = realThis->locs->locType;
+        const float seasonality = seasonalityMultiplier(simTime);
+        const double factor = realThis->locs->eventFactor;
+        const double exposureMinutes = eventDurationHours * 60.0;
+        if (!eventGroupLogPath.empty() && !eventGroupStream.is_open()) {
+            eventGroupStream.open(eventGroupLogPath.c_str());
+            eventGroupStream << "day\tstep\tlocation_index\tlocType\tpresent\tgroup\tinfectious_in_group\tratio\texposed\tinfected\n";
+            eventGroupInfectionStream.open((eventGroupLogPath + ".infections").c_str());
+            eventGroupInfectionStream << "day\tagent\tlocation_index\tinfector\n";
+        }
+        std::vector<unsigned> agentIds, locationIds, infectorIds;
+        std::vector<float> ratios, occupancies, infectiousSums;
+        std::vector<std::size_t> eventFirst, eventLast;
+        std::vector<unsigned> eventLoc, eventPresent, eventGroup;
+        std::vector<double> eventInfectious, eventRatio;
+        for (unsigned loc : starting) {
+            const unsigned begin = offsets[loc];
+            const unsigned end = offsets[loc + 1];
+            const unsigned present = end - begin;
+            eventFirst.push_back(agentIds.size());
+            eventLoc.push_back(loc);
+            eventPresent.push_back(present);
+            if (present == 0) {
+                eventGroup.push_back(0);
+                eventInfectious.push_back(0.0);
+                eventRatio.push_back(0.0);
+                eventLast.push_back(agentIds.size());
+                continue;
+            }
+            std::vector<unsigned> pool(people.begin() + begin, people.begin() + end);
+            std::mt19937_64 generator(mixBits(RandomGenerator::getBaseSeed() ^ 0x67726f7570ULL)
+                + mixBits((static_cast<std::uint64_t>(day) << 32) ^ static_cast<std::uint64_t>(loc)));
+            const unsigned group = std::min<unsigned>(eventGroupSize, present);
+            for (unsigned i = 0; i < group; ++i) {
+                std::uniform_int_distribution<unsigned> pick(i, present - 1);
+                std::swap(pool[i], pool[pick(generator)]);
+            }
+            double infectiousSum = 0.0;
+            for (unsigned i = 0; i < group; ++i) infectiousSum += infectious[pool[i]];
+            double ratio = 0.0;
+            if (infectiousSum > 0.0) {
+                const double density = infectiousSum / std::pow(static_cast<double>(group), densityExponent);
+                const double exponent = static_cast<double>(this->k) * density * locationInfectiousness[loc] * factor * seasonality * exposureMinutes;
+                ratio = -std::expm1(-exponent);
+                for (unsigned i = 0; i < group; ++i) {
+                    const unsigned agent = pool[i];
+                    if (!(susceptible[agent] > 0.0f)) continue;
+                    const double others = infectiousSum - infectious[agent];
+                    if (!(others > 0.0)) continue;
+                    std::uniform_real_distribution<double> unit(0.0, others);
+                    double draw = unit(generator);
+                    double cumulative = 0.0;
+                    unsigned infector = pool[0];
+                    for (unsigned j = 0; j < group; ++j) {
+                        if (pool[j] == agent) continue;
+                        cumulative += infectious[pool[j]];
+                        infector = pool[j];
+                        if (cumulative >= draw) break;
+                    }
+                    agentIds.push_back(agent);
+                    locationIds.push_back(loc);
+                    infectorIds.push_back(infector);
+                    ratios.push_back(static_cast<float>(ratio));
+                    occupancies.push_back(static_cast<float>(group));
+                    infectiousSums.push_back(static_cast<float>(infectiousSum));
+                }
+            }
+            eventGroup.push_back(group);
+            eventInfectious.push_back(infectiousSum);
+            eventRatio.push_back(ratio);
+            eventLast.push_back(agentIds.size());
+        }
+        const std::size_t exposures = agentIds.size();
+        thrust::host_vector<unsigned> infectedHost(exposures, 0u);
+        if (exposures > 0) {
+            thrust::device_vector<unsigned> agentD(agentIds.begin(), agentIds.end());
+            thrust::device_vector<unsigned> locD(locationIds.begin(), locationIds.end());
+            thrust::device_vector<unsigned> infectorD(infectorIds.begin(), infectorIds.end());
+            thrust::device_vector<float> ratioD(ratios.begin(), ratios.end());
+            thrust::device_vector<float> occD(occupancies.begin(), occupancies.end());
+            thrust::device_vector<float> sumD(infectiousSums.begin(), infectiousSums.end());
+            thrust::device_vector<unsigned> outD(exposures, 0u);
+            auto* ppstatePtr = thrust::raw_pointer_cast(ppstates.data());
+            auto* statPtr = thrust::raw_pointer_cast(realThis->agents->agentStats.data());
+            const unsigned* agentPtr = thrust::raw_pointer_cast(agentD.data());
+            const unsigned* locPtr = thrust::raw_pointer_cast(locD.data());
+            const unsigned* infectorPtr = thrust::raw_pointer_cast(infectorD.data());
+            const float* ratioPtr = thrust::raw_pointer_cast(ratioD.data());
+            const float* occPtr = thrust::raw_pointer_cast(occD.data());
+            const float* sumPtr = thrust::raw_pointer_cast(sumD.data());
+            unsigned* outPtr = thrust::raw_pointer_cast(outD.data());
+            const float* traitInfectiousnessPtr = getTraitInfectiousnessPtr();
+            const float* traitSusceptibilityPtr = traitSusceptibility.empty() ? nullptr : thrust::raw_pointer_cast(traitSusceptibility.data());
+            const double shedding = sheddingShape;
+            const float* sheddingMeanPtr = getSheddingMeanPtr();
+            const bool peak = peakMode;
+            thrust::for_each(thrust::make_counting_iterator<unsigned>(0), thrust::make_counting_iterator<unsigned>(static_cast<unsigned>(exposures)),
+                [=] HD(unsigned i) {
+                    const unsigned agent = agentPtr[i];
+                    auto& ppstate = ppstatePtr[agent];
+                    auto& stat = statPtr[agent];
+                    const float susceptibility = ppstate.getSusceptible(variant);
+                    if (!(susceptibility > 0.0f)) return;
+                    float probability = ratioPtr[i] * susceptibility;
+                    if (traitSusceptibilityPtr != nullptr) {
+                        const float weight = traitSusceptibilityPtr[agent];
+                        if (weight != 1.0f) probability = -expm1f(weight * log1pf(-probability));
+                    }
+                    if (!(RandomGenerator::randomUnit() < probability)) return;
+                    ppstate.gotInfected(variant);
+                    float shed;
+                    if (traitInfectiousnessPtr != nullptr) {
+                        shed = traitInfectiousnessPtr[agent];
+                    } else {
+                        shed = shedding > 0.0 ? static_cast<float>(RandomGenerator::gammaMeanOne(shedding)) : 1.0f;
+                        if (sheddingMeanPtr != nullptr) shed *= sheddingMeanPtr[agent];
+                    }
+                    ppstate.setShedMultiplier(peak ? 1.0f : shed);
+                    stat.shedMultiplier = shed;
+                    stat.symptomOnsetTimestamp = 0xffffffffu;
+                    stat.infectedTimestamp = timestamp;
+                    stat.infectedCount++;
+                    stat.infectedLocation = locPtr[i];
+                    stat.worstState = ppstate.getStateIdx();
+                    stat.worstStateTimestamp = timestamp;
+                    stat.variant |= 1 << variant;
+                    const unsigned infector = infectorPtr[i];
+                    stat.infectorId = infector;
+                    stat.infectorShed = statPtr[infector].shedMultiplier;
+                    stat.infectorInfectedTimestamp = statPtr[infector].infectedTimestamp;
+                    stat.infectedOccupancy = static_cast<unsigned>(occPtr[i]);
+                    stat.infectiousPresent = sumPtr[i];
+                    outPtr[i] = 1u;
+                });
+            infectedHost = outD;
+        }
+        if (!eventGroupLogPath.empty()) {
+            for (std::size_t e = 0; e < eventLoc.size(); ++e) {
+                unsigned infectedCount = 0;
+                for (std::size_t i = eventFirst[e]; i < eventLast[e]; ++i) {
+                    if (infectedHost[i]) {
+                        ++infectedCount;
+                        eventGroupInfectionStream << day << '\t' << agentIds[i] << '\t' << locationIds[i] << '\t' << infectorIds[i] << '\n';
+                    }
+                }
+                eventGroupStream << day << '\t' << stepOfDay << '\t' << eventLoc[e] << '\t' << static_cast<unsigned>(locTypes[eventLoc[e]]) << '\t'
+                                 << eventPresent[e] << '\t' << eventGroup[e] << '\t' << eventInfectious[e] << '\t' << eventRatio[e] << '\t'
+                                 << (eventLast[e] - eventFirst[e]) << '\t' << infectedCount << '\n';
+            }
+            eventGroupStream.flush();
+            eventGroupInfectionStream.flush();
+        }
+    }
+
     void infectionsAtLocations(Timehandler& simTime, unsigned timeStep, uint8_t variant) {
         PROFILE_FUNCTION();
         auto realThis = static_cast<SimulationType*>(this);
@@ -1029,6 +1329,7 @@ public:
             unsigned day = simTime.getTimestamp() / simTime.getStepsPerDay();
             if (!eventLogPath.empty() && eventLogDay >= 0 && static_cast<int>(day) != eventLogDay) flushEventLog();
             realThis->locs->updateDailyEvents(day);
+            if (eventGroupSize > 0) prepareGroupEvents(simTime);
             if (!eventLogPath.empty() && static_cast<int>(day) != eventLogDay) {
                 if (eventPresentMax.size() == realThis->locs->eventBoost.size()) {
                     thrust::fill(eventPresentMax.begin(), eventPresentMax.end(), 0u);
@@ -1050,7 +1351,7 @@ public:
         thrust::fill(infectionRatios.begin(), infectionRatios.end(), 0.0);
         thrust::fill(fullInfectedCounts.begin(), fullInfectedCounts.end(), 0.0f);
 
-        bool recordNewInfections = flagInfectionAtLocations || !infectionTracePath.empty();
+        bool recordNewInfections = flagInfectionAtLocations || !infectionTracePath.empty() || !episodeTracePath.empty();
         if (recordNewInfections) {
             if (infectionFlagAtLocations.size() == 0) infectionFlagAtLocations.resize(infectiousness.size());
             thrust::fill(infectionFlagAtLocations.begin(), infectionFlagAtLocations.end(), false);
@@ -1136,8 +1437,11 @@ public:
             sheddingShape,
             getTraitInfectiousnessPtr(),
             traitSusceptibility.empty() ? nullptr : thrust::raw_pointer_cast(traitSusceptibility.data()),
-            peakMode);
-        if (!infectionTracePath.empty()) attributeInfectors(variant);
+            peakMode,
+            getSheddingMeanPtr());
+        if (!infectionTracePath.empty() || !episodeTracePath.empty()) attributeInfectors(variant);
+        if (!episodeTracePath.empty()) writeEpisodes();
+        if (eventGroupSize > 0 && realThis->locs->eventRate > 0.0) runGroupEvents(simTime, timeStep, variant);
         if (flagInfectionAtLocations) {
             thrust::device_vector<unsigned> fullInfectedCounts2(fullInfectedCounts.size(), 0);
             Util::reduce_by_location(locationListOffsets,
