@@ -1,0 +1,25 @@
+world,detection,N_index_cases,ratio_p5,ratio_median,ratio_p95
+1 multiplier only,1.0,1000,0.91,1.018,1.269
+1 multiplier only,1.0,3000,0.949,1.033,1.185
+1 multiplier only,1.0,10000,0.996,1.047,1.145
+1 multiplier only,0.3,1000,0.88,1.013,1.251
+1 multiplier only,0.3,3000,0.937,1.016,1.246
+1 multiplier only,0.3,10000,0.985,1.046,1.118
+2b moderate scene + multiplier,1.0,1000,1.156,1.354,1.647
+2b moderate scene + multiplier,1.0,3000,1.23,1.404,1.602
+2b moderate scene + multiplier,1.0,10000,1.34,1.427,1.516
+2b moderate scene + multiplier,0.3,1000,1.039,1.217,1.498
+2b moderate scene + multiplier,0.3,3000,1.099,1.219,1.372
+2b moderate scene + multiplier,0.3,10000,1.159,1.233,1.327
+2a strong scene + multiplier,1.0,1000,1.208,1.414,2.047
+2a strong scene + multiplier,1.0,3000,1.305,1.468,1.789
+2a strong scene + multiplier,1.0,10000,1.395,1.487,1.657
+2a strong scene + multiplier,0.3,1000,1.025,1.205,1.807
+2a strong scene + multiplier,0.3,3000,1.09,1.25,1.612
+2a strong scene + multiplier,0.3,10000,1.181,1.284,1.436
+3b closed-group events,1.0,1000,1.886,2.152,2.487
+3b closed-group events,1.0,3000,1.997,2.156,2.351
+3b closed-group events,1.0,10000,2.055,2.157,2.267
+3b closed-group events,0.3,1000,1.142,1.279,1.508
+3b closed-group events,0.3,3000,1.193,1.304,1.418
+3b closed-group events,0.3,10000,1.243,1.298,1.363

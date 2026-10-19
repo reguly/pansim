@@ -20,6 +20,7 @@ import analyze_round10 as a10  # noqa: E402
 from analyze_round9 import nb_shares  # noqa: E402
 
 OUT = HERE.parent
+R6 = HERE / "results" / "round6"
 R9 = HERE / "results" / "round9"
 R10 = HERE / "results" / "round10"
 R11 = HERE / "results" / "round11"
@@ -118,6 +119,8 @@ def worlds():
         for arm in r11_arms(lam):
             labels.append((f"{nm}_{arm.split('_')[-1]}", R11, arm))
     labels.append(("world3_events_only", R10, "r10_w3_rate0.034"))
+    # the round-6 closed-group arm tuned on the moment k: it is the lowest likelihood k the events reach
+    labels.append(("world3b_events_M30_rate0.146", R6, "r67_M30"))
     labels.append(("world2_round10_gate_L10_sh1", R9, "r9_s9_t1_L10_sh1"))
     rows, joint, clusters, comp = collect(labels)
     write_csv(OUT / "59_r111_worlds.csv", rows)
