@@ -8,7 +8,7 @@
 2. **N4 done.** 20 draws per replicate, 4 worlds, 3 schemes, 2 rates. The standard deviation over draws of the pooled likelihood k is 0.005 to 0.028 (median 0.8 times the replicate-bootstrap standard error of the delivered table, range 0.46 to 1.39): thinning-draw noise is a sizeable part of, but not additional to, the replicate noise that is already in the 62_r122 intervals (the draws reuse the same 12 replicates). The round-12 point values lie inside the draw distributions.
 3. **N1 items 1 and 2 done (eight cells).** In worlds 1, 2b and 2a the independently recalibrated seed set 78001 to 78012 agrees with the round-12 set: no difference exceeds 1.8 combined standard errors in any of the five statistics, and the between-set SD of likelihood k is 1.0 to 1.4 times the within-set standard error. In **world 3b the round-12 set (77001 to 77012) is the odd one out**: it differs from both other recalibrated sets, while the other two (68101 and 78001) agree with each other (|z| at most 1.3 in every statistic). The three recalibrated sets give likelihood k 0.330, 0.306 and 0.326 (round 6, round 12, round 13), zero share 52.3%, 54.4% and 52.9%, ratio 2.16, 1.95, 2.13, share causing 80% 18.1%, 16.8%, 17.8%, observed minus NB zero -4.4, -3.9 and -4.2 points.
 4. **The excess in world 3b follows the calibrated coefficient, not the seeds.** On seed set 78001 to 78012 with the round-12 coefficient frozen (0.000130087) world 3b gives likelihood k 0.304 (round-12 set: 0.306), zero share 55.2% (54.4%), ratio 2.05 (1.95), 80% share 16.8% (16.8%), but the day-28 mean is 13.9% below the target. Recalibrating on 78001 to 78012 needs 0.000141382 (+8.7%) and moves every fingerprint to the round-6 values. So the fingerprints of world 3b are a function of the coefficient (the balance of background and event transmission) and the coefficient needed to reach day 28 depends on the seed set (0.000130, 0.000142, 0.000141). Size of that dependence: N2 would measure it; not run.
-5. **The conclusions that the registered orderings support hold in every set** (prediction (c) below), and the ordering of the means across the three recalibrated world-3b sets is stable. The size of the difference between world 3b and the others in the likelihood k (0.306 to 0.330 against 0.337 to 0.365) is smaller than the between-set range of world 3b itself plus its interval.
+5. **The conclusions that the registered orderings support hold in every set** (prediction (c) below), and the ordering of the means across the three recalibrated world-3b sets is stable. The gap in likelihood k between world 3b and world 1 is 0.051 on the round-12 set and 0.019 on the 78001 set (about 2.4 combined bootstrap standard errors); the between-set range of world 3b (0.306 to 0.330) is of the same order as the gap, so "world 3b is 0.05 below the others" is not supported at that size by the recalibrated sets.
 
 ## Registered predictions of note 65, N1 (with 2 sets for worlds 1, 2b, 2a and 3 recalibrated sets for 3b; item 3 pending)
 
@@ -34,11 +34,6 @@ By your rule item 3 runs: world 3b exceeds 1.2 times the within-set SE in all fi
 | w1 | s77_cal vs s78_cal | ratio | 1.057 | 1.043 | -0.014 | -0.3 | 0.29 |
 | w1 | s77_cal vs s78_cal | share causing 80% | 21.548 | 20.958 | -0.590 | -1.8 | 1.80 |
 | w1 | s77_cal vs s78_cal | obs. minus NB zero | 0.042 | -0.015 | -0.057 | -0.5 | 0.48 |
-| w1 | s77_cal vs s78_frozen | likelihood k | 0.357 | 0.345 | -0.012 | -1.3 | 1.34 |
-| w1 | s77_cal vs s78_frozen | zero share | 56.588 | 56.640 | +0.052 | +0.1 | 0.10 |
-| w1 | s77_cal vs s78_frozen | ratio | 1.057 | 1.043 | -0.014 | -0.3 | 0.29 |
-| w1 | s77_cal vs s78_frozen | share causing 80% | 21.548 | 20.958 | -0.590 | -1.8 | 1.80 |
-| w1 | s77_cal vs s78_frozen | obs. minus NB zero | 0.042 | -0.015 | -0.057 | -0.5 | 0.48 |
 | w2b | s77_cal vs s78_cal | likelihood k | 0.365 | 0.355 | -0.011 | -1.0 | 1.01 |
 | w2b | s77_cal vs s78_cal | zero share | 53.538 | 53.769 | +0.231 | +0.4 | 0.37 |
 | w2b | s77_cal vs s78_cal | ratio | 1.420 | 1.471 | +0.052 | +0.9 | 0.88 |
@@ -74,6 +69,8 @@ By your rule item 3 runs: world 3b exceeds 1.2 times the within-set SE in all fi
 | w3b | s77_cal vs s78_frozen | ratio | 1.950 | 2.053 | +0.103 | +1.4 | 1.40 |
 | w3b | s77_cal vs s78_frozen | share causing 80% | 16.763 | 16.835 | +0.072 | +0.1 | 0.15 |
 | w3b | s77_cal vs s78_frozen | obs. minus NB zero | -3.895 | -3.813 | +0.083 | +0.7 | 0.69 |
+
+(The world-1 comparison against the frozen cell is identical to the recalibrated one, because the cells are the same configuration; omitted here, present in the CSV.)
 
 
 ## Cells of N1 items 1 and 2 (and the existing sets for reference)
@@ -128,7 +125,7 @@ Calibration logs for the 78001 set (every iteration; the first row of each cell 
 
 ## What is not done and why
 
-N1 item 3, N2, N3, N5: the note asks for the checkpoint first. All cells take about 30 to 60 minutes each on this machine (see 66a); I can run N1 item 3, N2 and N3 at once on your word.
+N1 item 3, N2, N3, N5: the note asks for the checkpoint first. The eight cells above took about 55 minutes of wall clock in total (calibrations and frozen cells of the four worlds in parallel); N1 item 3, N2 and N3 would each take of the order of one hour, and I can run them on your word.
 
 ## Code and data changes
 
