@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Note 65 round 13 analysis: replicate-level exports (N0), cells of N1/N2/N3, and thinning draws (N4).
+
+  python3 superspreader/study/analyze_round13.py n0            # 66_n0_*.csv for every arm of rounds 6 to 12
+  python3 superspreader/study/analyze_round13.py cells         # 66_n1_* / 66_n2_* from results/round13
+  python3 superspreader/study/analyze_round13.py n4            # 66_n4_thinning_draws.csv
+
+Definitions are those of round 12 (analyze_round12.world_stats_with_events): index cases are agents infected on
+days 1 to 10 with a known infector, offspring are infections they cause up to day + 14, event offspring are
+infectees listed in <eventGroupLog>.infections. Per-replicate statistics are computed on that replicate's index
+cases alone.
+"""
+import csv
+import json
+import math
+import sys
+from collections import Counter, defaultdict
+from multiprocessing import Pool
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from r6stats import load_event_agents, load_events, ml_k, mom_k, write_csv  # noqa: E402
+import analyze_round10 as a10  # noqa: E402
+from analyze import load_daily  # noqa: E402
+from analyze_round7 import lorenz_shares  # noqa: E402
+from analyze_round9 import nb_shares  # noqa: E402
+
+OUT = HERE.parent
+RES = HERE / "results"
+UNKNOWN = a10.UNKNOWN
+SCHOOL_WORK = (3, 33, 4, 13, 44)
+HIGH = a10.HIGH
+HOSPITAL = (12,)
+_CTX = {}
+
+
+def ctx():
+    if not _CTX:
+        age, atype, home = a10.agent_table()
+        _CTX.update(age=age, atype=atype, home=home, hh_size=Counter(home[home >= 0].tolist()))
+    return _CTX
+
+
+def run_info(run):
+    cmd = json.loads((run / "command.json").read_text())
+    return {"seed": int(cmd[cmd.index("--seed") + 1]), "k": float(cmd[cmd.index("-k") + 1]),
+            "weeks": int(cmd[cmd.index("-w") + 1]), "agents": Path(cmd[cmd.index("-a") + 1]).name}
+
+
+def replicate_core(run):
+    """One replicate: everything computed on its own index cases. Returns (row, ids, total, event)."""
+    c = ctx()
+    home, atype = c["home"], c["atype"]
+    run = Path(run)
+    info = run_info(run)
+    household_ok = info["agents"] == "agents2.json"
+    rows = a10.read_trace(run)
+    ev_path = run / "events.tsv.infections"
+    ev_agents = load_event_agents(ev_path) if ev_path.exists() else None
+    ev_log = run / "events.tsv"
+    ev_header = ev_log.open().readline().rstrip("\n").split("\t") if ev_log.exists() else []
+    # two formats: closed-group log (infectious_in_group, with .infections) and the venue-day boost log (max_present)
+    ev_venue_days = load_events(ev_log) if "max_present" in ev_header else None
+
+    day, children = {}, defaultdict(list)
+    loc_counts = Counter()
+    hh_trans = 0
+    for a, inf, loc, lt, d in rows:
+        day[a] = d
+        if inf != UNKNOWN:
+            children[inf].append((loc, lt, d, a))
+        if 1 <= d <= 28:
+            loc_counts[lt] += 1
+            if household_ok and inf != UNKNOWN and home[a] >= 0 and home[a] == home[inf]:
+                hh_trans += 1
+    known = {a for kids in children.values() for _l, _t, _d, a in kids}
+    ids, total, event = [], [], []
+    for a, d in day.items():
+        if a not in known or not (1 <= d <= 10):
+            continue
+        n = e = 0
+        for _loc, _lt, cd, ca in children.get(a, ()):
+            if cd <= d + 14:
+                n += 1
+                if ev_agents is not None and ca in ev_agents:
+                    e += 1
+                elif ev_venue_days is not None and (_loc, cd) in ev_venue_days:
+                    e += 1
+        ids.append(a)
+        total.append(n)
+        event.append(e)
+    ids, total, event = np.asarray(ids, dtype=np.int64), np.asarray(total, dtype=np.int64), np.asarray(event, dtype=np.int64)
+
+    daily = load_daily(run / "stdout.txt")
+    row = {"seed": info["seed"], "background_coefficient": info["k"], "weeks": info["weeks"]}
+    for dd in (28, 56, 84, 112):
+        row[f"day{dd}_cumulative_infections"] = int(daily[dd - 1]["INF"]) if len(daily) >= dd else ""
+    n = len(total)
+    row["index_cases"] = n
+    row["early_R"] = float(total.mean()) if n else float("nan")
+    nodes, seeds_ = len(rows), sum(1 for r in rows if r[1] == UNKNOWN)
+    row["mean_offspring_all_nodes"] = (nodes - seeds_) / nodes if nodes else float("nan")
+    row["k_mom"] = mom_k(total) if n > 1 else ""
+    row["k_ml"] = ml_k(total) if n > 1 else ""
+    row["share_0"] = float(np.mean(total == 0)) if n else float("nan")
+    ls = lorenz_shares(total) if n else {}
+    row["share_causing_80pct"] = ls.get("share_of_index_cases_causing_80pct", "")
+    row["largest_offspring"] = int(total.max()) if n else 0
+    tot_loc = sum(loc_counts.values())
+    if tot_loc:
+        row["infections_share_home"] = loc_counts.get(2, 0) / tot_loc
+        row["infections_share_school_and_work"] = sum(loc_counts.get(t, 0) for t in SCHOOL_WORK) / tot_loc
+        row["infections_share_high_L_types"] = sum(loc_counts.get(t, 0) for t in HIGH) / tot_loc
+        row["infections_share_hospital"] = sum(loc_counts.get(t, 0) for t in HOSPITAL) / tot_loc
+    row["infections_d1_28"] = tot_loc
+    if household_ok:
+        den = sum(max(c["hh_size"][int(home[a])] - 1, 0) for a in ids.tolist() if home[a] >= 0)
+        row["household_secondary_attack_numerator"] = hh_trans
+        row["household_secondary_attack_denominator"] = den
+    # ten largest clusters
+    comp = []
+    for j in (np.argsort(total)[::-1][:10] if n else []):
+        inf_id = int(ids[j])
+        kids = children.get(inf_id, [])
+        if not kids:
+            continue
+        bvd = Counter((loc, d) for loc, _lt, d, _a in kids)
+        same = (sum(1 for _l, _t, _d, a in kids if home[a] == home[inf_id]) / len(kids)
+                if household_ok and home[inf_id] >= 0 else float("nan"))
+        comp.append((int(total[j]), same, max(bvd.values()) / len(kids), len({loc for loc, _lt, _d, _a in kids})))
+    if comp:
+        arr = np.asarray(comp, dtype=float)
+        row["top10_mean_offspring"] = float(arr[:, 0].mean())
+        row["top10_mean_same_household_share"] = float(np.nanmean(arr[:, 1])) if household_ok else ""
+        row["top10_mean_largest_venue_day_share"] = float(arr[:, 2].mean())
+        row["top10_mean_distinct_venues"] = float(arr[:, 3].mean())
+    # events
+    if "infectious_in_group" in ev_header:
+        et = ei = einf = 0
+        with open(ev_log) as handle:
+            for r in csv.DictReader(handle, delimiter="\t"):
+                et += 1
+                if float(r["infectious_in_group"]) > 0:
+                    einf += 1
+                ei += int(r["infected"])
+        row["events_total"] = et
+        row["events_with_infectious"] = einf
+        row["event_infections"] = ei
+        row["event_offspring_share"] = float(event.sum() / total.sum()) if total.sum() else ""
+    elif ev_venue_days is not None:
+        row["events_total"] = len(ev_venue_days)
+        row["event_offspring_share"] = float(event.sum() / total.sum()) if total.sum() else ""
+    return row, ids, total, event
+
+
+def _core_task(args):
+    arm, rep, run = args
+    row, ids, total, event = replicate_core(run)
+    return arm, rep, row, ids, total, event
+
+
+def add_top1(rows_cores):
+    """Pooled top 1% of the arm: the round(1% x pooled index cases) largest offspring counts, ties broken by a fixed
+    random order. Counts of those infectors by agent type are written per replicate (threshold = smallest included count)."""
+    c = ctx()
+    sizes = [t.size for _r, _i, t, _e in rows_cores]
+    pooled = np.concatenate([t for _r, _i, t, _e in rows_cores])
+    if not pooled.size:
+        return None
+    cut = max(1, int(round(0.01 * pooled.size)))
+    owner = np.repeat(np.arange(len(sizes)), sizes)
+    pos = np.concatenate([np.arange(n) for n in sizes])
+    tie = np.random.default_rng(20261022).random(pooled.size)
+    order = np.lexsort((tie, -pooled))[:cut]
+    threshold = int(pooled[order].min())
+    types = sorted(set(c["atype"].tolist()))
+    for r_idx, (row, ids, total, _e) in enumerate(rows_cores):
+        sel = ids[pos[order[owner[order] == r_idx]]]
+        row["top1pct_threshold_pooled"] = threshold
+        row["top1pct_infectors"] = int(sel.size)
+        for t in types:
+            if t >= 0:
+                row[f"top1pct_type{t}"] = int(np.sum(c["atype"][sel] == t))
+    return threshold
+
+
+def export_arms(arms, hist_path, summary_path, procs=4):
+    """arms: list of (arm_name, [run dirs]). Writes the histogram and summary files."""
+    tasks = [(arm, rep, run) for arm, runs in arms for rep, run in enumerate(runs, start=1)]
+    with Pool(procs) as pool:
+        done = pool.map(_core_task, tasks, chunksize=2)
+    by_arm = defaultdict(list)
+    for arm, rep, row, ids, total, event in done:
+        row = {"arm": arm, "replicate": rep, **row}
+        by_arm[arm].append((row, ids, total, event))
+    hist_rows, sum_rows = [], []
+    for arm, _runs in arms:
+        cores = by_arm[arm]
+        add_top1([(r, i, t, e) for r, i, t, e in cores])
+        for row, _ids, total, event in cores:
+            sum_rows.append(row)
+            for (a, e), n in sorted(Counter(zip(total.tolist(), event.tolist())).items()):
+                hist_rows.append({"arm": arm, "seed": row["seed"], "replicate": row["replicate"], "offspring_total": a,
+                                  "offspring_at_events": e if "event_offspring_share" in row else "", "index_cases": n})
+    write_csv(hist_path, hist_rows)
+    # one column order for the whole file
+    cols = []
+    for r in sum_rows:
+        for k in r:
+            if k not in cols:
+                cols.append(k)
+    with open(summary_path, "w", newline="") as handle:
+        w = csv.DictWriter(handle, fieldnames=cols, lineterminator="\n")
+        w.writeheader()
+        for r in sum_rows:
+            w.writerow({k: r.get(k, "") for k in cols})
+    return sum_rows
+
+
+def n0_arms():
+    arms = []
+    for r in range(6, 13):
+        for f in sorted((RES / f"round{r}" / "state").glob("*.json")):
+            d = json.loads(f.read_text())
+            if not isinstance(d, dict) or "prefix" not in d:
+                continue
+            runs = sorted(p.parent for p in (RES / f"round{r}" / d["prefix"]).glob("rep*/trace.tsv"))
+            if runs:
+                arms.append((f"round{r}:{f.stem}", runs))
+    return arms
+
+
+def pair_dirs():
+    out = []
+    for name, base in (("round6:r62_A0", RES / "round6/r62/A0"), ("round6:r62_E", RES / "round6/r62/E"),
+                       ("round6:r62_P0", RES / "round6/r62/P0"), ("round7:s5_pairs", RES / "round7/r7/s5_pairs"),
+                       ("round10:pairs_w1", RES / "round10/r10/pairs_w1"), ("round10:pairs_w2_gate", RES / "round10/r10/pairs_w2")):
+        out.append((name, base))
+    for d in sorted((RES / "round11/r11").glob("pairs_*")):
+        out.append((f"round11:{d.name}", d))
+    runs = [(n, sorted(p.parent for p in b.glob("rep*/trace.tsv"))) for n, b in out]
+    return [(n, r) for n, r in runs if r]
+
+
+def repeat_pairs(path, arms):
+    from analyze import load_daily as ld
+    from analyze_round6 import episode_pairs
+    rows = []
+    for arm, runs in arms:
+        for rep, run in enumerate(runs, start=1):
+            if not (run / "episodes.tsv").exists():
+                continue
+            last_day = len(ld(run / "stdout.txt")) - 1
+            prs, _w2, _m, _n = episode_pairs(run, last_day)
+            for agent, d1, o1, d2, o2 in prs:
+                rows.append({"arm": arm, "seed": run_info(run)["seed"], "replicate": rep, "agent": agent, "first_day": d1,
+                             "first_infection_offspring": o1, "second_day": d2, "second_infection_offspring": o2})
+    write_csv(path, rows)
+
+
+def n0():
+    arms = n0_arms()
+    pairs = pair_dirs()
+    arms += pairs
+    print(f"N0: {len(arms)} arms, {sum(len(r) for _a, r in arms)} replicates", flush=True)
+    export_arms(arms, OUT / "66_n0_replicate_histograms.csv", OUT / "66_n0_replicate_summary.csv")
+    repeat_pairs(OUT / "66_n0_repeat_pairs_by_replicate.csv", pairs)
+
+
+if __name__ == "__main__":
+    {"n0": n0}[sys.argv[1]]()
