@@ -416,6 +416,11 @@ R12_STATES = {"w1": ("round10", "r10_w1_sh0.32"), "w2a": ("round11", "r11_w2_L30
               "w2b": ("round11", "r11_w2_L10_sh0.58"), "w3b": ("round12", "r12_w3b_M30_rate0.1456")}
 
 
+def nb_shares_full(mean, k):
+    from r6stats import nb_shares as _nb
+    return _nb(mean, k)
+
+
 def pooled_stats(cores):
     """cores: list of (row, ids, total, event) of one cell. Point statistics on the pooled index cases."""
     total = np.concatenate([c[2] for c in cores])
@@ -425,7 +430,15 @@ def pooled_stats(cores):
     kmom, kml = mom_k(total), ml_k(total)
     z, nb80 = nb_shares(kml, mean)
     s0 = float(np.mean(total == 0))
-    out.update({"index_cases": int(total.size), "early_R": mean, "k_mom": kmom, "k_ml": kml, "k_ml_over_k_mom": kml / kmom,
+    nb_pub = nb_shares_full(0.88, 0.27)
+    nb_own = nb_shares_full(mean, kml)
+    out.update({"share_1_to_5": float(np.mean((total >= 1) & (total <= 5))), "share_above_5": float(np.mean(total > 5)),
+                "share_at_least_20": float(np.mean(total >= 20)), "share_at_least_50": float(np.mean(total >= 50)),
+                "maximum_offspring": int(total.max()), "p99_offspring": float(np.quantile(total, 0.99)),
+                "nb_own_share_above_5": nb_own["share_above_5"], "nb_published_zero": nb_pub["share_0"],
+                "nb_published_above_5": nb_pub["share_above_5"],
+                "share_above_5_over_nb_own": float(np.mean(total > 5)) / nb_own["share_above_5"] if nb_own["share_above_5"] else "",
+                "index_cases": int(total.size), "early_R": mean, "k_mom": kmom, "k_ml": kml, "k_ml_over_k_mom": kml / kmom,
                 "share_0": s0, "nb_zero_at_k_ml": z, "observed_minus_nb_zero": s0 - z,
                 "share_causing_80pct": lorenz_shares(total).get("share_of_index_cases_causing_80pct"),
                 "nb_80pct_at_k_ml": nb80})
@@ -464,6 +477,8 @@ def bootstrap_cell(cores, draws=BOOT, seed=20261022):
         cols["k_ml"].append(kml)
         cols["k_ml_over_k_mom"].append(kml / kmom)
         cols["share_0"].append(s0)
+        cols["share_above_5"].append(float(np.mean(total > 5)))
+        cols["share_1_to_5"].append(float(np.mean((total >= 1) & (total <= 5))))
         cols["observed_minus_nb_zero"].append(s0 - z)
         cols["share_causing_80pct"].append(lorenz_shares(total).get("share_of_index_cases_causing_80pct"))
         inf = np.asarray([r["infections_d1_28"] for r in rows], dtype=float)
@@ -520,10 +535,11 @@ def cell_registry(include_sens=True):
     return cells
 
 
-def cells_export(tag="n1", select=None):
-    cells = [c for c in cell_registry() if (select is None or select(c))]
+def cells_export(tag="n1", select=None, cells=None, outdir=None):
+    outdir = outdir or OUT
+    cells = cells if cells is not None else [c for c in cell_registry() if (select is None or select(c))]
     arms = [(c["cell"], c["dirs"]) for c in cells]
-    sum_rows = export_arms(arms, OUT / f"66_{tag}_replicate_histograms.csv", OUT / f"66_{tag}_replicate_summary.csv")
+    sum_rows = export_arms(arms, outdir / f"{tag}_replicate_histograms.csv", outdir / f"{tag}_replicate_summary.csv")
     by = defaultdict(list)
     # recompute cores for pooled statistics (cheap)
     out, cal_rows = [], []
@@ -543,12 +559,12 @@ def cells_export(tag="n1", select=None):
         for k in r:
             if k not in cols:
                 cols.append(k)
-    with open(OUT / f"66_{tag}_cells_summary.csv", "w", newline="") as handle:
+    with open(outdir / f"{tag}_cells_summary.csv", "w", newline="") as handle:
         w = csv.DictWriter(handle, fieldnames=cols, lineterminator="\n")
         w.writeheader()
         for r in out:
             w.writerow({k: r.get(k, "") for k in cols})
-    write_csv(OUT / f"66_{tag}_calibration_log.csv", cal_rows)
+    write_csv(outdir / f"{tag}_calibration_log.csv", cal_rows)
     for r in out:
         print(f"{r['cell']:22s} k={r['background_coefficient']:.6g} day28={r['day28_mean']:.0f} ({r['day28_vs_6211.25']:+.1%}) "
               f"R={r['early_R']:.3f} k_ml={r['k_ml']:.3f} ({r['k_ml_low']:.3f},{r['k_ml_high']:.3f}) k_mom={r['k_mom']:.3f} "
@@ -558,7 +574,7 @@ def cells_export(tag="n1", select=None):
 
 
 if __name__ == "__main__":
-    {"n0": n0, "n4": n4, "n1": lambda: cells_export("n1", lambda c: c["kind"] in ("round12_calibrated", "round6_calibrated", "calibrated", "frozen") and c["set"] in ("s77", "s78", "s79", "s68")),
-     "n2": lambda: cells_export("n2", lambda c: c["kind"].startswith("sens") or c["kind"] == "round12_calibrated"),
-     "n5": lambda: cells_export("n5", lambda c: c["set"] == "n5" or c["kind"] == "round12_calibrated"),
-     "n3": lambda: cells_export("n3", lambda c: c["set"].startswith("n3final") or c["kind"] == "round12_calibrated")}[sys.argv[1]]()
+    {"n0": n0, "n4": n4, "n1": lambda: cells_export("66_n1", lambda c: c["kind"] in ("round12_calibrated", "round6_calibrated", "calibrated", "frozen") and c["set"] in ("s77", "s78", "s79", "s68")),
+     "n2": lambda: cells_export("66_n2", lambda c: c["kind"].startswith("sens") or c["kind"] == "round12_calibrated"),
+     "n5": lambda: cells_export("66_n5", lambda c: c["set"] == "n5" or c["kind"] == "round12_calibrated"),
+     "n3": lambda: cells_export("66_n3", lambda c: c["set"].startswith("n3final") or c["kind"] == "round12_calibrated")}[sys.argv[1]]()
