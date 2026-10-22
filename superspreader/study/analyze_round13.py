@@ -57,7 +57,7 @@ def replicate_core(run):
     home, atype = c["home"], c["atype"]
     run = Path(run)
     info = run_info(run)
-    household_ok = info["agents"] == "agents2.json"
+    household_ok = info["agents"] in ("agents2.json", "r13_agents_venues_redrawn.json")  # homes and types unchanged in the redrawn file
     rows = a10.read_trace(run)
     ev_path = run / "events.tsv.infections"
     ev_agents = load_event_agents(ev_path) if ev_path.exists() else None
