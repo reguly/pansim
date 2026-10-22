@@ -406,5 +406,158 @@ def n4(procs=4):
         print(f"wrote {path.name} ({len(rows)} rows)")
 
 
+# ---------------------------------------------------------------- cells (N1, N2, N3): pooled statistics with replicate bootstrap
+
+BOOT = 1000
+WORLDS = ("w1", "w2b", "w2a", "w3b")
+WORLD_NAMES = {"w1": "world1_multiplier_only", "w2b": "world2b_scene_L10_sh0.58", "w2a": "world2a_scene_L30_sh0.70",
+               "w3b": "world3b_events_M30_rate0.146"}
+R12_STATES = {"w1": ("round10", "r10_w1_sh0.32"), "w2a": ("round11", "r11_w2_L30_sh0.70"),
+              "w2b": ("round11", "r11_w2_L10_sh0.58"), "w3b": ("round12", "r12_w3b_M30_rate0.1456")}
+
+
+def pooled_stats(cores):
+    """cores: list of (row, ids, total, event) of one cell. Point statistics on the pooled index cases."""
+    total = np.concatenate([c[2] for c in cores])
+    event = np.concatenate([c[3] for c in cores])
+    out = {}
+    mean = float(total.mean())
+    kmom, kml = mom_k(total), ml_k(total)
+    z, nb80 = nb_shares(kml, mean)
+    s0 = float(np.mean(total == 0))
+    out.update({"index_cases": int(total.size), "early_R": mean, "k_mom": kmom, "k_ml": kml, "k_ml_over_k_mom": kml / kmom,
+                "share_0": s0, "nb_zero_at_k_ml": z, "observed_minus_nb_zero": s0 - z,
+                "share_causing_80pct": lorenz_shares(total).get("share_of_index_cases_causing_80pct"),
+                "nb_80pct_at_k_ml": nb80})
+    rows = [c[0] for c in cores]
+    inf = np.asarray([r["infections_d1_28"] for r in rows], dtype=float)
+    for key in ("infections_share_home", "infections_share_school_and_work", "infections_share_high_L_types", "infections_share_hospital"):
+        out[key] = float(np.sum([r[key] * n for r, n in zip(rows, inf)]) / inf.sum())
+    num = sum(r["household_secondary_attack_numerator"] for r in rows)
+    den = sum(r["household_secondary_attack_denominator"] for r in rows)
+    out["household_secondary_attack_rate"] = num / den
+    for key in ("top10_mean_offspring", "top10_mean_same_household_share", "top10_mean_largest_venue_day_share", "top10_mean_distinct_venues"):
+        out[key] = float(np.mean([r[key] for r in rows]))
+    out["largest_offspring_mean_over_replicates"] = float(np.mean([r["largest_offspring"] for r in rows]))
+    out["day28_mean"] = float(np.mean([r["day28_cumulative_infections"] for r in rows]))
+    out["day28_vs_6211.25"] = out["day28_mean"] / 6211.25 - 1
+    if "event_offspring_share" in rows[0] and rows[0]["event_offspring_share"] != "":
+        out["event_offspring_share"] = float(event.sum() / total.sum())
+    return out
+
+
+def bootstrap_cell(cores, draws=BOOT, seed=20261022):
+    """Replicate bootstrap (5th and 95th percentile) of the pooled statistics."""
+    rng = np.random.default_rng(seed)
+    n = len(cores)
+    cols = defaultdict(list)
+    for _ in range(draws):
+        pick = rng.integers(0, n, size=n)
+        total = np.concatenate([cores[i][2] for i in pick])
+        rows = [cores[i][0] for i in pick]
+        mean = float(total.mean())
+        kmom, kml = mom_k(total), ml_k(total)
+        z, _ = nb_shares(kml, mean)
+        s0 = float(np.mean(total == 0))
+        cols["early_R"].append(mean)
+        cols["k_mom"].append(kmom)
+        cols["k_ml"].append(kml)
+        cols["k_ml_over_k_mom"].append(kml / kmom)
+        cols["share_0"].append(s0)
+        cols["observed_minus_nb_zero"].append(s0 - z)
+        cols["share_causing_80pct"].append(lorenz_shares(total).get("share_of_index_cases_causing_80pct"))
+        inf = np.asarray([r["infections_d1_28"] for r in rows], dtype=float)
+        cols["infections_share_home"].append(float(np.sum([r["infections_share_home"] * m for r, m in zip(rows, inf)]) / inf.sum()))
+        cols["household_secondary_attack_rate"].append(sum(r["household_secondary_attack_numerator"] for r in rows)
+                                                       / sum(r["household_secondary_attack_denominator"] for r in rows))
+        for key in ("top10_mean_same_household_share", "top10_mean_largest_venue_day_share"):
+            cols[key].append(float(np.mean([r[key] for r in rows])))
+    out = {}
+    for key, vals in cols.items():
+        v = np.asarray([x for x in vals if x is not None and np.isfinite(x)], dtype=float)
+        out[f"{key}_low"], out[f"{key}_high"] = float(np.quantile(v, 0.05)), float(np.quantile(v, 0.95))
+        out[f"{key}_boot_sd"] = float(v.std(ddof=1))
+    return out
+
+
+def cell_dirs(base, prefix):
+    return sorted(p.parent for p in (RES / base / prefix).glob("rep*/trace.tsv"))
+
+
+def cell_registry(include_sens=True):
+    """All cells with a state file: (cell name, world, set, kind, run dirs, coefficient, calibration state)."""
+    cells = []
+    for w in WORLDS:
+        rnd, label = R12_STATES[w]
+        st = json.loads((RES / rnd / "state" / f"{label}.json").read_text())
+        cells.append({"cell": f"{w}:s77_cal", "world": w, "set": "s77", "kind": "round12_calibrated", "dirs": cell_dirs(rnd, st["prefix"]),
+                      "k": st["k"], "state": st})
+    r6 = json.loads((RES / "round6/state/r67_M30.json").read_text())
+    cells.append({"cell": "w3b:s68_cal", "world": "w3b", "set": "s68", "kind": "round6_calibrated", "dirs": cell_dirs("round6", r6["prefix"]),
+                  "k": r6["k"], "state": r6})
+    st_dir = RES / "round13" / "state"
+    for f in sorted(st_dir.glob("r13_*.json")):
+        d = json.loads(f.read_text())
+        if "prefix" not in d:
+            continue
+        stem = f.stem[len("r13_"):]
+        for w in WORLDS:
+            if not stem.endswith("_" + w):
+                continue
+            tag = stem[: -len(w) - 1]
+            if tag.startswith("frozen_"):
+                kind, setname = "frozen", tag[len("frozen_"):]
+            elif tag.startswith("sens_"):
+                kind, setname = f"sens_x{tag[len('sens_'):]}", "s77"
+            else:
+                kind, setname = "calibrated", tag
+            if kind.startswith("sens") and not include_sens:
+                continue
+            dirs = cell_dirs("round13", d["prefix"])
+            if dirs and (d.get("matched") is not False or kind != "calibrated"):
+                cells.append({"cell": f"{w}:{setname}_{kind}" if kind != "calibrated" else f"{w}:{setname}_cal", "world": w, "set": setname,
+                              "kind": kind, "dirs": dirs, "k": d["k"], "state": d})
+    return cells
+
+
+def cells_export(tag="n1", select=None):
+    cells = [c for c in cell_registry() if (select is None or select(c))]
+    arms = [(c["cell"], c["dirs"]) for c in cells]
+    sum_rows = export_arms(arms, OUT / f"66_{tag}_replicate_histograms.csv", OUT / f"66_{tag}_replicate_summary.csv")
+    by = defaultdict(list)
+    # recompute cores for pooled statistics (cheap)
+    out, cal_rows = [], []
+    for c in cells:
+        cores = [replicate_core(r) for r in c["dirs"]]
+        st = pooled_stats(cores)
+        bt = bootstrap_cell(cores)
+        row = {"cell": c["cell"], "world": c["world"], "seed_set": c["set"], "kind": c["kind"], "replicates": len(c["dirs"]),
+               "background_coefficient": c["k"], "first_seed": run_info(c["dirs"][0])["seed"], **st, **bt}
+        out.append(row)
+        for i, pt in enumerate(c["state"].get("points", []), start=1):
+            cal_rows.append({"cell": c["cell"], "iteration": i, "coefficient": pt["k"], "day28_mean": pt["day28"],
+                             "replicates_used": len(pt.get("values", [])), "pilot": bool(pt.get("pilot")),
+                             "chosen": abs(pt["k"] - c["k"]) < 1e-12 * max(1, abs(c["k"])) and not pt.get("pilot")})
+    cols = []
+    for r in out:
+        for k in r:
+            if k not in cols:
+                cols.append(k)
+    with open(OUT / f"66_{tag}_cells_summary.csv", "w", newline="") as handle:
+        w = csv.DictWriter(handle, fieldnames=cols, lineterminator="\n")
+        w.writeheader()
+        for r in out:
+            w.writerow({k: r.get(k, "") for k in cols})
+    write_csv(OUT / f"66_{tag}_calibration_log.csv", cal_rows)
+    for r in out:
+        print(f"{r['cell']:22s} k={r['background_coefficient']:.6g} day28={r['day28_mean']:.0f} ({r['day28_vs_6211.25']:+.1%}) "
+              f"R={r['early_R']:.3f} k_ml={r['k_ml']:.3f} ({r['k_ml_low']:.3f},{r['k_ml_high']:.3f}) k_mom={r['k_mom']:.3f} "
+              f"ratio={r['k_ml_over_k_mom']:.2f} zero={r['share_0']:.3f} gap={r['observed_minus_nb_zero']*100:+.2f} "
+              f"s80={r['share_causing_80pct']*100:.1f} home={r['infections_share_home']*100:.1f}", flush=True)
+    return out
+
+
 if __name__ == "__main__":
-    {"n0": n0, "n4": n4}[sys.argv[1]]()
+    {"n0": n0, "n4": n4, "n1": lambda: cells_export("n1", lambda c: c["kind"] in ("round12_calibrated", "round6_calibrated", "calibrated", "frozen")),
+     "n2": lambda: cells_export("n2", lambda c: c["kind"].startswith("sens") or c["kind"] == "round12_calibrated"),
+     "n3": lambda: cells_export("n3", lambda c: c["set"].startswith("t") or c["kind"] == "round12_calibrated")}[sys.argv[1]]()
