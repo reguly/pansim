@@ -1,0 +1,38 @@
+{
+ "seed": 20261022,
+ "cell_size_m": 2000,
+ "types": {
+  "5": {
+   "slots": 461130,
+   "slots_changed": 447026,
+   "repair_swaps": 13185,
+   "counts_equal": true,
+   "agents_with_repeated_venue_after": 0,
+   "agents_with_repeated_venue_before": 0
+  },
+  "8": {
+   "slots": 754278,
+   "slots_changed": 729906,
+   "repair_swaps": 31001,
+   "counts_equal": true,
+   "agents_with_repeated_venue_after": 0,
+   "agents_with_repeated_venue_before": 2
+  },
+  "9": {
+   "slots": 489084,
+   "slots_changed": 447003,
+   "repair_swaps": 38998,
+   "counts_equal": true,
+   "agents_with_repeated_venue_after": 0,
+   "agents_with_repeated_venue_before": 0
+  },
+  "10": {
+   "slots": 500574,
+   "slots_changed": 477112,
+   "repair_swaps": 22157,
+   "counts_equal": true,
+   "agents_with_repeated_venue_after": 0,
+   "agents_with_repeated_venue_before": 0
+  }
+ }
+}

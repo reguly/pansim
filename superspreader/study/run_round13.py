@@ -46,23 +46,22 @@ def round12_k(world):
     return json.loads(R12[world].read_text())["k"]
 
 
-def world_flags(world, run_dir=None):
+def world_flags(world, param=None):
     """Extra command-line flags and locations file of a world, as in rounds 10 to 12."""
-    dump = [] if run_dir is None else ["--hviDump", str(Path(run_dir) / "hvi.csv")]
     if world == "w1":
-        return ["--sheddingShape", "0.32"], r6.LOCS1, False
+        return ["--sheddingShape", str(param if param is not None else "0.32")], r6.LOCS1, False
     if world == "w2a":
         return r8.ARMS["s8_2_t1_L30"]["flags"] + ["--sheddingShape", "0.70"], r8.locs_for(30), True
     if world == "w2b":
-        return r8.ARMS["s8_2_t1_L10"]["flags"] + ["--sheddingShape", "0.58"], r8.locs_for(10), True
+        return r8.ARMS["s8_2_t1_L10"]["flags"] + ["--sheddingShape", str(param if param is not None else "0.58")], r8.locs_for(10), True
     if world == "w3b":
-        return ["--eventRate", "0.1456", "--eventFactor", "3000", "--eventTypes", "5,8",
+        return ["--eventRate", str(param if param is not None else "0.1456"), "--eventFactor", "3000", "--eventTypes", "5,8",
                 "--eventGroupSize", "30", "--eventDurationHours", "2"], r6.LOCS1, True
     raise KeyError(world)
 
 
-def make_for(world):
-    flags, _locs, dump = world_flags(world)
+def make_for(world, param=None):
+    flags, _locs, dump = world_flags(world, param)
 
     def make(k, seed, w, run_dir):
         extra = list(flags)
@@ -74,9 +73,12 @@ def make_for(world):
     return make
 
 
-def job_for(world):
+REDRAWN = HERE / "inputs" / "r13_agents_venues_redrawn.json"
+
+
+def job_for(world, agents=None):
     _flags, locs, _dump = world_flags(world)
-    return {"agents": r6.AGENTS2, "locations": locs}
+    return {"agents": agents or r6.AGENTS2, "locations": locs}
 
 
 def cal(world, setname):
@@ -109,7 +111,87 @@ def sens(world, mult):
     fixed_k(f"sens_{m:g}", world, round12_k(world) * m, seeds_of("s77"))
 
 
-TASKS = {"cal": lambda: cal(sys.argv[2], sys.argv[3]), "frozen": lambda: frozen(sys.argv[2], sys.argv[3]),
+# ---------------------------------------------------------------- N3: target band
+
+# anchors from earlier rounds: (parameter, likelihood k, background coefficient) used only to start the secant
+N3_ANCHORS = {
+    "w1": [(0.32, 0.357, 0.000499), (0.5, 0.5255, 0.00047), (1.0, 0.919, 0.00044)],
+    "w2b": [(0.58, 0.365, 0.000117), (1.0, 0.5096, 0.000094)],
+    "w3b": [(0.1456, 0.306, 0.000130), (0.08, 0.5678, 0.000231), (0.05, 0.8887, 0.000304)],
+}
+N3_SEEDS_CAL = list(range(76001, 76007))
+
+
+def _interp(world, target):
+    """Log-log interpolation of (parameter, coefficient) at the target k from the anchors."""
+    import math
+    a = sorted(N3_ANCHORS[world], key=lambda t: t[1])
+    for (p0, k0, c0), (p1, k1, c1) in zip(a, a[1:]):
+        if k0 <= target <= k1:
+            f = (math.log(target) - math.log(k0)) / (math.log(k1) - math.log(k0))
+            return math.exp(math.log(p0) + f * (math.log(p1) - math.log(p0))), math.exp(math.log(c0) + f * (math.log(c1) - math.log(c0)))
+    (p0, k0, c0), (p1, k1, c1) = (a[0], a[1]) if target < a[0][1] else (a[-2], a[-1])
+    slope = (math.log(p1) - math.log(p0)) / (math.log(k1) - math.log(k0))
+    cslope = (math.log(c1) - math.log(c0)) / (math.log(k1) - math.log(k0))
+    return (math.exp(math.log(p1) + slope * (math.log(target) - math.log(k1))),
+            math.exp(math.log(c1) + cslope * (math.log(target) - math.log(k1))))
+
+
+def _measure(run_dirs):
+    import analyze_round13 as a13
+    cores = [a13.replicate_core(r) for r in run_dirs]
+    total = __import__("numpy").concatenate([c[2] for c in cores])
+    from r6stats import ml_k, mom_k
+    return ml_k(total), mom_k(total), int(total.size)
+
+
+def n3(world, target):
+    """At most three trials of the tuned parameter, each with its coefficient calibrated on 76001..76006, then the
+    final cell on 77001..77012 with the coefficient recalibrated."""
+    import math
+    target = float(target)
+    log_path = STATE / f"n3_trials_{world}_{target:g}.json"
+    trials = json.loads(log_path.read_text()) if log_path.exists() else []
+    param, coeff = _interp(world, target)
+    for it in range(3):
+        if len(trials) > it:
+            continue
+        if it >= 1:
+            pts = [t for t in trials if t.get("matched")] or trials
+            if len(pts) >= 2 and pts[-1]["param"] != pts[-2]["param"] and pts[-1]["k_ml"] != pts[-2]["k_ml"]:
+                slope = (math.log(pts[-1]["param"]) - math.log(pts[-2]["param"])) / (math.log(pts[-1]["k_ml"]) - math.log(pts[-2]["k_ml"]))
+            else:
+                slope = (math.log(param) - math.log(N3_ANCHORS[world][0][0])) / (math.log(target) - math.log(N3_ANCHORS[world][0][1]))
+            param = pts[-1]["param"] * math.exp(slope * (math.log(target) - math.log(pts[-1]["k_ml"])))
+            coeff = pts[-1]["coefficient"]
+        label = f"r13_n3trial-t{target:g}-i{it + 1}_{world}"
+        st = r6.match(label, make_for(world, f"{param:.4g}"), coeff, N3_SEEDS_CAL, 4, TARGET, job_for(world))
+        dirs = sorted(p.parent for p in (RESULTS / st["prefix"]).glob("rep*/trace.tsv"))
+        k_ml, k_mom, n = _measure(dirs)
+        trials.append({"iteration": it + 1, "param": float(f"{param:.4g}"), "coefficient": st["k"], "day28": st["day28"],
+                       "matched": st["matched"], "k_ml": k_ml, "k_mom": k_mom, "index_cases": n, "replicates": len(dirs)})
+        r6.save_json(log_path, trials)
+        print(f"R13 n3 {world} target {target:g} trial {it + 1}: param={param:.4g} k={st['k']:.5g} day28={st['day28']:.0f} "
+              f"k_ml={k_ml:.3f} k_mom={k_mom:.3f}", flush=True)
+        if abs(k_ml - target) <= 0.03:
+            break
+    best = min(trials, key=lambda t: abs(t["k_ml"] - target))
+    label = f"r13_n3final-t{target:g}_{world}"
+    st = r6.match(label, make_for(world, f"{best['param']:.4g}"), best["coefficient"], seeds_of("s77"), 4, TARGET,
+                  job_for(world), pilot=4)
+    r6.save_json(STATE / f"n3_final_{world}_{target:g}.json", {"param": best["param"], "target": target, "trial": best["iteration"],
+                                                                "coefficient": st["k"], "matched": st["matched"], "day28": st["day28"]})
+    print(f"R13 n3 final {world} target {target:g}: param={best['param']:.4g} k={st['k']:.5g} day28={st['day28']:.0f} matched={st['matched']}", flush=True)
+
+
+def n5(world):
+    """N5: the same world on a redrawn venue assignment (build_r13_inputs.py), seeds 77001..77012, recalibrated."""
+    st = r6.match(f"r13_n5_{world}", make_for(world), round12_k(world), seeds_of("s77"), 4, TARGET,
+                  job_for(world, REDRAWN), pilot=4)
+    print(f"R13 n5 {world} k={st['k']:.6g} day28={st['day28']:.1f} matched={st['matched']}", flush=True)
+
+
+TASKS = {"n5": lambda: n5(sys.argv[2]), "n3": lambda: n3(sys.argv[2], sys.argv[3]), "cal": lambda: cal(sys.argv[2], sys.argv[3]), "frozen": lambda: frozen(sys.argv[2], sys.argv[3]),
          "sens": lambda: sens(sys.argv[2], sys.argv[3])}
 
 if __name__ == "__main__":

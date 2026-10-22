@@ -558,6 +558,7 @@ def cells_export(tag="n1", select=None):
 
 
 if __name__ == "__main__":
-    {"n0": n0, "n4": n4, "n1": lambda: cells_export("n1", lambda c: c["kind"] in ("round12_calibrated", "round6_calibrated", "calibrated", "frozen")),
+    {"n0": n0, "n4": n4, "n1": lambda: cells_export("n1", lambda c: c["kind"] in ("round12_calibrated", "round6_calibrated", "calibrated", "frozen") and c["set"] in ("s77", "s78", "s79", "s68")),
      "n2": lambda: cells_export("n2", lambda c: c["kind"].startswith("sens") or c["kind"] == "round12_calibrated"),
-     "n3": lambda: cells_export("n3", lambda c: c["set"].startswith("t") or c["kind"] == "round12_calibrated")}[sys.argv[1]]()
+     "n5": lambda: cells_export("n5", lambda c: c["set"] == "n5" or c["kind"] == "round12_calibrated"),
+     "n3": lambda: cells_export("n3", lambda c: c["set"].startswith("n3final") or c["kind"] == "round12_calibrated")}[sys.argv[1]]()
