@@ -271,5 +271,140 @@ def n0():
     repeat_pairs(OUT / "66_n0_repeat_pairs_by_replicate.csv", pairs)
 
 
+# ---------------------------------------------------------------- N4: thinning draws
+
+N4_WORLDS = [
+    ("world1_multiplier_only", "round10", "r10_w1_sh0.32"),
+    ("world2b_scene_L10_sh0.58", "round11", "r11_w2_L10_sh0.58"),
+    ("world3b_events_M30_rate0.146_paired", "round12", "r12_w3b_M30_rate0.1456"),
+    ("world2a_scene_L30_sh0.70", "round11", "r11_w2_L30_sh0.70"),
+]
+N4_SCHEMES = ("random", "household_infectee", "household_coupled")
+N4_RATES = (0.6, 0.3)
+N4_DRAWS = 20
+SCHEME_CODE = {"random": 1, "household_infectee": 2, "household_coupled": 3}
+
+
+class Prepared:
+    """One replicate parsed once: index cases, their children within 14 days, infected agents."""
+
+    def __init__(self, run):
+        rows = a10.read_trace(run)
+        self.agents = np.asarray(sorted({a for a, *_ in rows}), dtype=np.int64)
+        index, self.day, self.children = [], {}, defaultdict(list)
+        for a, inf, loc, lt, d in rows:
+            self.day[a] = d
+            if inf != UNKNOWN:
+                if 1 <= d <= 10:
+                    index.append(a)
+                self.children[inf].append((loc, lt, d, a))
+        self.index_ids = np.asarray(index, dtype=np.int64)
+        self.kids = {}
+        for a in index:
+            lim = self.day[a] + 14
+            self.kids[a] = [k for k in self.children.get(a, []) if k[2] <= lim]
+
+
+def thin_prepared(prep, scheme, rate, rng, home, unique_homes):
+    """Same schemes as analyze_round12.thin_replicate, on a prepared replicate."""
+    ids = prep.index_ids
+    if scheme == "random":
+        det = dict(zip(prep.agents.tolist(), (rng.random(prep.agents.size) < rate).tolist()))
+        keep = np.asarray([det[int(i)] for i in ids], dtype=bool)
+        child_ok = lambda a: det[a]
+    elif scheme == "household_coupled":
+        hh = dict(zip(unique_homes.tolist(), (rng.random(unique_homes.size) < rate).tolist()))
+        keep = np.asarray([hh.get(int(home[i]), False) for i in ids], dtype=bool)
+        child_ok = lambda a: hh.get(int(home[a]), False)
+    elif scheme == "household_infectee":
+        keep = rng.random(ids.size) < rate
+        hh = dict(zip(unique_homes.tolist(), (rng.random(unique_homes.size) < rate).tolist()))
+        child_ok = lambda a: hh.get(int(home[a]), False)
+    else:
+        raise ValueError(scheme)
+    kept = ids[keep]
+    totals = np.zeros(kept.size, dtype=np.int64)
+    ck, hh_num, hh_den = {}, 0, 0
+    for j, inf in enumerate(kept.tolist()):
+        kids = [k for k in prep.kids[inf] if child_ok(k[3])]
+        ck[inf] = kids
+        totals[j] = len(kids)
+        hh_den += len(kids)
+        if home[inf] >= 0 and kids:
+            hh_num += sum(1 for *_x, a in kids if home[a] == home[inf])
+    clusters = []
+    for j in np.argsort(totals)[::-1][:10]:
+        inf = int(kept[j])
+        kids = ck.get(inf, [])
+        if not kids:
+            continue
+        bvd = Counter((loc, d) for loc, _lt, d, _a in kids)
+        same = sum(1 for *_x, a in kids if home[inf] >= 0 and home[a] == home[inf]) / len(kids)
+        clusters.append((same, max(bvd.values()) / len(kids)))
+    return totals, clusters, hh_num, hh_den
+
+
+def thin_stats(totals, clusters, hh_num, hh_den):
+    n = totals.size
+    out = {"detected_index_cases": n}
+    if n < 2 or totals.sum() == 0:
+        return out
+    mean = float(totals.mean())
+    kmom, kml = mom_k(totals), ml_k(totals)
+    z, _s80 = nb_shares(kml, mean)
+    out.update({"thinned_R": mean, "k_mom": kmom, "k_ml": kml, "k_ratio": kml / kmom if kmom else "",
+                "share_0": float(np.mean(totals == 0)), "nb_zero_at_k_ml": z,
+                "observed_minus_nb_zero": float(np.mean(totals == 0)) - z,
+                "all_offspring_same_household_share": hh_num / hh_den if hh_den else "",
+                "top10_same_household_share": float(np.mean([c[0] for c in clusters])) if clusters else "",
+                "top10_largest_venue_day_share": float(np.mean([c[1] for c in clusters])) if clusters else ""})
+    return out
+
+
+def _n4_world(args):
+    w_name, rnd, label = args
+    _age, _atype, home = a10.agent_table()
+    unique_homes = np.unique(home[home >= 0])
+    runs, _st = a10.run_dirs(RES / rnd, label)
+    preps = [Prepared(r) for r in runs]
+    per_rep, pooled = [], []
+    for scheme in N4_SCHEMES:
+        for rate in N4_RATES:
+            for draw in range(1, N4_DRAWS + 1):
+                tots, cls, hn, hd = [], [], 0, 0
+                for r_idx, prep in enumerate(preps):
+                    rng = np.random.default_rng([13, r_idx, SCHEME_CODE[scheme], int(round(rate * 100)), draw])
+                    t, c, a, b = thin_prepared(prep, scheme, rate, rng, home, unique_homes)
+                    st = thin_stats(t, c, a, b)
+                    per_rep.append({"arm": w_name, "scheme": scheme, "rate": rate, "replicate": r_idx + 1, "draw": draw, **st})
+                    tots.append(t)
+                    cls += c
+                    hn += a
+                    hd += b
+                st = thin_stats(np.concatenate(tots), cls, hn, hd)
+                pooled.append({"arm": w_name, "scheme": scheme, "rate": rate, "draw": draw, **st})
+        print(f"N4 {w_name} {scheme} done", flush=True)
+    return per_rep, pooled
+
+
+def n4(procs=4):
+    with Pool(min(procs, len(N4_WORLDS))) as pool:
+        res = pool.map(_n4_world, N4_WORLDS)
+    per = [r for p, _q in res for r in p]
+    pooled = [r for _p, q in res for r in q]
+    for path, rows in ((OUT / "66_n4_thinning_draws.csv", per), (OUT / "66_n4_thinning_draws_pooled.csv", pooled)):
+        cols = []
+        for r in rows:
+            for k in r:
+                if k not in cols:
+                    cols.append(k)
+        with open(path, "w", newline="") as handle:
+            w = csv.DictWriter(handle, fieldnames=cols, lineterminator="\n")
+            w.writeheader()
+            for r in rows:
+                w.writerow({k: r.get(k, "") for k in cols})
+        print(f"wrote {path.name} ({len(rows)} rows)")
+
+
 if __name__ == "__main__":
-    {"n0": n0}[sys.argv[1]]()
+    {"n0": n0, "n4": n4}[sys.argv[1]]()
