@@ -1,0 +1,4 @@
+run,label,coefficient,own_day28,all36_day28,trials,matched_own,fp_n,fp_replicates,fp_mean,fp_k_ml,fp_k_mom,fp_zero_share,fp_nb_zero,fp_zero_gap_points,fp_delaporte_baseline,fp_max_offspring,fp_share_0,fp_share_1_to_5,fp_share_above_5,k_ml_boot_low,k_ml_boot_high,k_ml_jt_low,k_ml_jt_high,gap_boot_low,gap_boot_high,gap_jt_low,gap_jt_high,param,mean_within_3pct
+B,w1,0.000296736,,,1,,16853,36,0.889753,0.251814,0.247381,0.683024,0.683445,-0.0421593,0.0103152,27,0.683024,0.278526,0.0384501,,,,,,,,,0.2437,True
+B,w2b,7.11432e-05,,,1,,10529,36,0.902175,0.258383,0.181288,0.673283,0.678313,-0.502987,0.0918079,41,0.673283,0.29224,0.0344762,,,,,,,,,0.3966,True
+B,w3b,0.000113094,,,9,,14491,36,0.888966,0.349973,0.133163,0.611828,0.64248,-3.06519,0.479145,28,0.611828,0.360983,0.0271893,,,,,,,,,0.07216,True

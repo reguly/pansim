@@ -1,0 +1,13 @@
+tilt,seeds,group,population,agents,role_disc_hours_per_day,hdt_sum_per_day,hdt_high_per_day,hdt_high_share,all_hours_at_high_types
+t0,77001-77012,class,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,7855.33,11.0826,9.94262,5.84439,0.587812,5.90293
+t0,77001-77012,others_eligible,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,149174,3.83085,3.41991,1.81868,0.531793,1.86776
+t0,73001,class,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,7774,11.0856,9.92627,5.83358,0.587691,5.89999
+t0,73001,others_eligible,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,149255,3.8377,3.42452,1.82069,0.531662,1.86898
+t0.5,77001-77012,class,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,7855.33,11.0845,10.4863,8.43544,0.804425,8.49373
+t0.5,77001-77012,others_eligible,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,149174,3.83079,3.41991,1.81867,0.531788,1.86774
+t0.5,73001,class,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,7774,11.0735,10.4639,8.41674,0.804363,8.48309
+t0.5,73001,others_eligible,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,149255,3.83771,3.42482,1.82088,0.53167,1.86917
+t1,77001-77012,class,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,7855.33,11.0823,11.0222,11.0221,0.999996,11.0803
+t1,77001-77012,others_eligible,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,149174,3.83082,3.41991,1.81868,0.53179,1.86775
+t1,73001,class,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,7774,11.0814,11.0139,11.0139,0.999998,11.0797
+t1,73001,others_eligible,eligible agents aged 15+ in types 4-8; class is the 5% round-8 class,149255,3.83765,3.42473,1.82085,0.531676,1.86914

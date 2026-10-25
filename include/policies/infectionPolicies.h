@@ -16,6 +16,14 @@
 #include <cstdint>
 #include "customExceptions.h"
 
+struct InfEpStepObs {
+    unsigned loc;
+    float infVal;
+    float shedMult;
+    float sLoc;
+    unsigned numAgents;
+};
+
 template<class SimulationType>
 class BasicInfection {
 private:
@@ -52,6 +60,45 @@ private:
     std::string infectionTracePath = "";
     std::string episodeTracePath = "";
     std::ofstream episodeTraceStream;
+    std::string infectiousEpisodeLogPath = "";
+    struct RecordedInfectiousEpisode {
+        unsigned infectorId;
+        unsigned episodeId;
+        int day;
+        unsigned venueId;
+        unsigned venueType;
+        double durationHours;
+        double susceptiblesPresent;
+        double expectedInfectionsMult1;
+        double realisedMultiplier;
+        unsigned eventFlag;
+        std::vector<std::pair<unsigned, unsigned>> childEvents;
+    };
+    struct ActiveInfectiousEpisode {
+        bool active = false;
+        unsigned episodeId = 0;
+        int day = -1;
+        unsigned venueId = 0;
+        unsigned venueType = 0;
+        unsigned steps = 0;
+        double susceptiblesSum = 0.0;
+        double expectedMult1Sum = 0.0;
+        double realisedMultSum = 0.0;
+        std::vector<std::pair<unsigned, unsigned>> childEvents;
+    };
+    bool infEpInitialised = false;
+    int infEpLastScanDay = -1;
+    unsigned infEpStepsPerDay = 144;
+    std::vector<int> infEpIndexDay;
+    std::vector<unsigned> infEpIndexList;
+    thrust::device_vector<unsigned> infEpIndexDevice;
+    std::vector<unsigned> infEpNextId;
+    std::vector<float> infEpLocInf;
+    std::vector<unsigned> infEpLocTypes;
+    std::vector<float> infEpVolumeHost;
+    std::vector<ActiveInfectiousEpisode> infEpActive;
+    std::vector<RecordedInfectiousEpisode> infEpRecorded;
+    thrust::device_vector<InfEpStepObs> infEpStepObsDevice;
     unsigned eventGroupSize = 0;
     double eventDurationHours = 2.0;
     std::string eventGroupLogPath = "";
@@ -229,6 +276,9 @@ public:
             ("episodeTrace",
             "Write one row per infection episode, at the time of infection, to this TSV path. Unlike --infectionTrace it keeps every episode of a reinfected agent",
             cxxopts::value<std::string>()->default_value(""))
+            ("infectiousEpisodeLog",
+            "Write one row per infectious venue-stay or super-event episode of days 1-10 index cases within 14 days to this TSV path",
+            cxxopts::value<std::string>()->default_value(""))
             ("venueProfile",
             "Location-type transmission profile: off, covid, or caregiving",
             cxxopts::value<std::string>()->default_value("off"))
@@ -290,6 +340,7 @@ public:
     void finalize() {
         flushEventLog();
         writeInfectionTrace();
+        writeInfectiousEpisodeLog();
         writeOccupancyStats();
         writeProfile();
         if (flagInfectionAtLocations)
@@ -355,6 +406,7 @@ protected:
         densityExponent = result["densityExponent"].as<double>();
         infectionTracePath = result["infectionTrace"].as<std::string>();
         episodeTracePath = result["episodeTrace"].as<std::string>();
+        infectiousEpisodeLogPath = result["infectiousEpisodeLog"].as<std::string>();
         eventGroupSize = result["eventGroupSize"].as<unsigned>();
         eventDurationHours = result["eventDurationHours"].as<double>();
         eventGroupLogPath = result["eventGroupLog"].as<std::string>();
@@ -364,8 +416,8 @@ protected:
         volumeTypeFactors = result["volumeTypeFactors"].as<std::string>();
         volumeHomeType = result["volumeHomeType"].as<unsigned>();
         if (flagInfectionAtLocations) dumpstore = new DumpStore();
-        if (dumpToFile || flagInfectionAtLocations || !infectionTracePath.empty() || !episodeTracePath.empty() || !occupancyStatsPath.empty()
-            || volumeModelMode != "off")
+        if (dumpToFile || flagInfectionAtLocations || !infectionTracePath.empty() || !episodeTracePath.empty()
+            || !infectiousEpisodeLogPath.empty() || !occupancyStatsPath.empty() || volumeModelMode != "off")
             Util::needAgentsSortedByLocation = 1;
     }
 
@@ -1180,6 +1232,8 @@ public:
         std::vector<std::size_t> eventFirst, eventLast;
         std::vector<unsigned> eventLoc, eventPresent, eventGroup;
         std::vector<double> eventInfectious, eventRatio;
+        std::vector<std::vector<unsigned>> eventPools;
+        const bool logInfEp = !infectiousEpisodeLogPath.empty() && day >= 1 && day <= 24;
         for (unsigned loc : starting) {
             const unsigned begin = offsets[loc];
             const unsigned end = offsets[loc + 1];
@@ -1192,6 +1246,7 @@ public:
                 eventInfectious.push_back(0.0);
                 eventRatio.push_back(0.0);
                 eventLast.push_back(agentIds.size());
+                if (logInfEp) eventPools.emplace_back();
                 continue;
             }
             std::vector<unsigned> pool(people.begin() + begin, people.begin() + end);
@@ -1202,6 +1257,7 @@ public:
                 std::uniform_int_distribution<unsigned> pick(i, present - 1);
                 std::swap(pool[i], pool[pick(generator)]);
             }
+            if (logInfEp) eventPools.emplace_back(pool.begin(), pool.begin() + group);
             double infectiousSum = 0.0;
             for (unsigned i = 0; i < group; ++i) infectiousSum += infectious[pool[i]];
             double ratio = 0.0;
@@ -1301,6 +1357,50 @@ public:
                 });
             infectedHost = outD;
         }
+        if (logInfEp) {
+            thrust::device_vector<float> shedDevice(n);
+            thrust::transform(ppstates.begin(), ppstates.end(), shedDevice.begin(),
+                [] HD(const typename SimulationType::PPState_t& ppstate) -> float { return ppstate.getShedMultiplier(); });
+            thrust::host_vector<float> shedHost = shedDevice;
+            for (std::size_t e = 0; e < eventLoc.size(); ++e) {
+                const unsigned loc = eventLoc[e];
+                const unsigned group = eventGroup[e];
+                if (group == 0) continue;
+                const double sGroup = static_cast<double>(eventLast[e] - eventFirst[e]);
+                const double denom = (densityExponent == 1.0) ? static_cast<double>(group) : std::pow(static_cast<double>(group), densityExponent);
+                for (unsigned u : eventPools[e]) {
+                    if (u >= infEpIndexDay.size() || infEpIndexDay[u] < 1) continue;
+                    const int iday = infEpIndexDay[u];
+                    if (day < iday || day > iday + 14) continue;
+                    const float infVal = infectious[u];
+                    if (!(infVal > 0.0f)) continue;
+                    double m_u = static_cast<double>(shedHost[u]);
+                    if (!(m_u > 0.0)) m_u = 1.0;
+                    const double baseInf = static_cast<double>(infVal) / m_u;
+                    const double w_u = (denom > 0.0)
+                        ? (sGroup * static_cast<double>(this->k) * (baseInf / denom) * static_cast<double>(locationInfectiousness[loc])
+                            * static_cast<double>(seasonality) * exposureMinutes)
+                        : 0.0;
+                    RecordedInfectiousEpisode rec;
+                    rec.infectorId = u;
+                    rec.episodeId = ++infEpNextId[u];
+                    rec.day = day;
+                    rec.venueId = loc;
+                    rec.venueType = static_cast<unsigned>(locTypes[loc]);
+                    rec.durationHours = eventDurationHours;
+                    rec.susceptiblesPresent = sGroup;
+                    rec.expectedInfectionsMult1 = w_u;
+                    rec.realisedMultiplier = factor * m_u;
+                    rec.eventFlag = 1u;
+                    for (std::size_t idx = eventFirst[e]; idx < eventLast[e]; ++idx) {
+                        if (infectedHost[idx] && infectorIds[idx] == u) {
+                            rec.childEvents.push_back({agentIds[idx], timestamp});
+                        }
+                    }
+                    infEpRecorded.push_back(std::move(rec));
+                }
+            }
+        }
         if (!eventGroupLogPath.empty()) {
             for (std::size_t e = 0; e < eventLoc.size(); ++e) {
                 unsigned infectedCount = 0;
@@ -1316,6 +1416,229 @@ public:
             }
             eventGroupStream.flush();
             eventGroupInfectionStream.flush();
+        }
+    }
+
+    void flushActiveInfectiousEpisode(unsigned u, double stepHours) {
+        auto& act = infEpActive[u];
+        if (!act.active || act.steps == 0u) {
+            act.active = false;
+            return;
+        }
+        RecordedInfectiousEpisode rec;
+        rec.infectorId = u;
+        rec.episodeId = act.episodeId;
+        rec.day = act.day;
+        rec.venueId = act.venueId;
+        rec.venueType = act.venueType;
+        rec.durationHours = static_cast<double>(act.steps) * stepHours;
+        rec.susceptiblesPresent = act.susceptiblesSum / static_cast<double>(act.steps);
+        rec.expectedInfectionsMult1 = act.expectedMult1Sum;
+        rec.realisedMultiplier = act.realisedMultSum / static_cast<double>(act.steps);
+        rec.eventFlag = 0u;
+        rec.childEvents = std::move(act.childEvents);
+        infEpRecorded.push_back(std::move(rec));
+        act.active = false;
+        act.steps = 0u;
+    }
+
+    void recordBackgroundInfectiousEpisodes(Timehandler& simTime, unsigned timeStep, uint8_t variant) {
+        if (infectiousEpisodeLogPath.empty()) return;
+        auto realThis = static_cast<SimulationType*>(this);
+        const unsigned nAgents = static_cast<unsigned>(realThis->agents->PPValues.size());
+        if (!infEpInitialised) {
+            infEpInitialised = true;
+            infEpIndexDay.assign(nAgents, -1);
+            infEpNextId.assign(nAgents, 0u);
+            infEpActive.assign(nAgents, ActiveInfectiousEpisode{});
+            thrust::host_vector<float> li = realThis->locs->infectiousness;
+            infEpLocInf.assign(li.begin(), li.end());
+            thrust::host_vector<typename SimulationType::TypeOfLocation_t> lt = realThis->locs->locType;
+            infEpLocTypes.resize(lt.size());
+            for (std::size_t j = 0; j < lt.size(); ++j) infEpLocTypes[j] = static_cast<unsigned>(lt[j]);
+            if (volumeActive) {
+                thrust::host_vector<float> vd = volumeDenominator;
+                infEpVolumeHost.assign(vd.begin(), vd.end());
+            }
+        }
+        const unsigned stepsPerDay = simTime.getStepsPerDay();
+        const unsigned timestamp = simTime.getTimestamp();
+        const int day = static_cast<int>(timestamp / stepsPerDay);
+        const double stepHours = static_cast<double>(timeStep) / 60.0;
+        if (day != infEpLastScanDay) {
+            infEpLastScanDay = day;
+            infEpStepsPerDay = stepsPerDay;
+            if (day >= 1 && day <= 12) {
+                thrust::host_vector<AgentStats> statsHost = realThis->agents->agentStats;
+                bool added = false;
+                for (unsigned a = 0; a < nAgents; ++a) {
+                    if (infEpIndexDay[a] >= 0) continue;
+                    const unsigned ts = statsHost[a].infectedTimestamp;
+                    if (ts == 0xffffffffu || statsHost[a].infectorId == 0xffffffffu) continue;
+                    const int iday = static_cast<int>(ts / stepsPerDay);
+                    if (iday >= 1 && iday <= 10) {
+                        infEpIndexDay[a] = iday;
+                        infEpIndexList.push_back(a);
+                        added = true;
+                    }
+                }
+                if (added) {
+                    infEpIndexDevice.assign(infEpIndexList.begin(), infEpIndexList.end());
+                    infEpStepObsDevice.resize(infEpIndexList.size());
+                }
+            }
+        }
+        if (day < 1 || infEpIndexList.empty()) return;
+        if (day > 25) {
+            for (unsigned u : infEpIndexList) {
+                if (infEpActive[u].active) flushActiveInfectiousEpisode(u, stepHours);
+            }
+            return;
+        }
+        const unsigned nIdx = static_cast<unsigned>(infEpIndexList.size());
+        const unsigned* idxPtr = thrust::raw_pointer_cast(infEpIndexDevice.data());
+        InfEpStepObs* obsPtr = thrust::raw_pointer_cast(infEpStepObsDevice.data());
+        const auto* statesPtr = thrust::raw_pointer_cast(realThis->agents->PPValues.data());
+        const unsigned* placesPtr = thrust::raw_pointer_cast(realThis->agents->location.data());
+        const unsigned* offsetsPtr = thrust::raw_pointer_cast(realThis->locs->locationListOffsets.data());
+        const unsigned* peoplePtr = thrust::raw_pointer_cast(realThis->locs->locationAgentList.data());
+        const unsigned* newlyPtr = thrust::raw_pointer_cast(newlyInfectedAgents.data());
+        thrust::for_each(thrust::make_counting_iterator<unsigned>(0), thrust::make_counting_iterator<unsigned>(nIdx),
+            [=] HD(unsigned k) {
+                const unsigned u = idxPtr[k];
+                const unsigned loc = placesPtr[u];
+                const float infVal = statesPtr[u].isInfectious(variant);
+                const float shedMult = statesPtr[u].getShedMultiplier();
+                const unsigned begin = offsetsPtr[loc];
+                const unsigned end = offsetsPtr[loc + 1];
+                float sLoc = 0.0f;
+                if (infVal > 0.0f) {
+                    for (unsigned j = begin; j < end; ++j) {
+                        const unsigned other = peoplePtr[j];
+                        const float sVal = statesPtr[other].getSusceptible(variant);
+                        if (sVal > 0.0f) sLoc += sVal;
+                        else if (newlyPtr[other] != 0u) sLoc += 1.0f;
+                    }
+                }
+                obsPtr[k] = InfEpStepObs{loc, infVal, shedMult, sLoc, end - begin};
+            });
+        thrust::host_vector<InfEpStepObs> obsHost = infEpStepObsDevice;
+        const bool hasEventBoost = realThis->locs->eventBoost.size() == realThis->locs->infectiousness.size();
+        thrust::host_vector<float> boostHost;
+        if (hasEventBoost) boostHost = realThis->locs->eventBoost;
+        const double seasonality = seasonalityMultiplier(simTime);
+
+        for (unsigned k = 0; k < nIdx; ++k) {
+            const unsigned u = infEpIndexList[k];
+            const int iday = infEpIndexDay[u];
+            const InfEpStepObs& obs = obsHost[k];
+            const bool inWindow = (day >= iday && day <= iday + 14 && obs.infVal > 0.0f);
+            if (!inWindow) {
+                if (infEpActive[u].active) flushActiveInfectiousEpisode(u, stepHours);
+                continue;
+            }
+            const unsigned loc = obs.loc;
+            if (infEpActive[u].active && (infEpActive[u].venueId != loc || infEpActive[u].day != day)) {
+                flushActiveInfectiousEpisode(u, stepHours);
+            }
+            auto& act = infEpActive[u];
+            if (!act.active) {
+                act.active = true;
+                act.episodeId = ++infEpNextId[u];
+                act.day = day;
+                act.venueId = loc;
+                act.venueType = loc < infEpLocTypes.size() ? infEpLocTypes[loc] : 0u;
+                act.steps = 0u;
+                act.susceptiblesSum = 0.0;
+                act.expectedMult1Sum = 0.0;
+                act.realisedMultSum = 0.0;
+                act.childEvents.clear();
+            }
+            act.steps += 1u;
+            double m_u = static_cast<double>(obs.shedMult);
+            if (!(m_u > 0.0)) m_u = 1.0;
+            const double baseInf = static_cast<double>(obs.infVal) / m_u;
+            const unsigned numAgents = obs.numAgents;
+            double denom = (densityExponent == 1.0) ? static_cast<double>(numAgents) : std::pow(static_cast<double>(numAgents), densityExponent);
+            if (!infEpVolumeHost.empty() && loc < infEpVolumeHost.size() && infEpVolumeHost[loc] > 0.0f) {
+                denom = volumeFillOne ? static_cast<double>(numAgents) * static_cast<double>(infEpVolumeHost[loc])
+                                      : static_cast<double>(infEpVolumeHost[loc]);
+            }
+            const double boost = (hasEventBoost && loc < boostHost.size()) ? static_cast<double>(boostHost[loc]) : 1.0;
+            const double locInf = loc < infEpLocInf.size() ? static_cast<double>(infEpLocInf[loc]) : 0.0;
+            const double sLoc = static_cast<double>(obs.sLoc);
+            const double wStep = (numAgents > 0 && denom > 0.0)
+                ? (sLoc * static_cast<double>(this->k) * (baseInf / denom) * locInf * seasonality * static_cast<double>(timeStep))
+                : 0.0;
+            act.susceptiblesSum += sLoc;
+            act.expectedMult1Sum += wStep;
+            act.realisedMultSum += m_u * boost;
+        }
+
+        thrust::device_vector<unsigned> newIds(nAgents);
+        auto lastNew = thrust::copy_if(thrust::make_counting_iterator<unsigned>(0),
+            thrust::make_counting_iterator<unsigned>(nAgents),
+            newlyInfectedAgents.begin(),
+            newIds.begin(),
+            [] HD(unsigned flag) { return flag != 0u; });
+        const unsigned newCount = static_cast<unsigned>(lastNew - newIds.begin());
+        if (newCount > 0) {
+            thrust::host_vector<unsigned> hostNewIds(newIds.begin(), newIds.begin() + newCount);
+            for (unsigned i = 0; i < newCount; ++i) {
+                const unsigned child = hostNewIds[i];
+                AgentStats st = realThis->agents->agentStats[child];
+                const unsigned inf = st.infectorId;
+                if (inf < infEpActive.size() && infEpActive[inf].active) {
+                    infEpActive[inf].childEvents.push_back({child, timestamp});
+                }
+            }
+        }
+    }
+
+    void writeInfectiousEpisodeLog() {
+        if (infectiousEpisodeLogPath.empty()) return;
+        auto realThis = static_cast<SimulationType*>(this);
+        const double stepHours = 24.0 / static_cast<double>(infEpStepsPerDay > 0 ? infEpStepsPerDay : 144u);
+        for (unsigned u : infEpIndexList) {
+            if (u < infEpActive.size() && infEpActive[u].active) {
+                flushActiveInfectiousEpisode(u, stepHours);
+            }
+        }
+        const unsigned nAgents = static_cast<unsigned>(realThis->agents->PPValues.size());
+        std::sort(infEpRecorded.begin(), infEpRecorded.end(),
+            [](const RecordedInfectiousEpisode& a, const RecordedInfectiousEpisode& b) {
+                if (a.infectorId != b.infectorId) return a.infectorId < b.infectorId;
+                if (a.day != b.day) return a.day < b.day;
+                return a.episodeId < b.episodeId;
+            });
+        std::ofstream out(infectiousEpisodeLogPath.c_str());
+        out << "infector_id\tepisode_id\tday\tvenue_id\tvenue_type\thousehold_vs_other\tduration_hours\tsusceptibles_present\t"
+               "expected_infections_mult1\trealised_multiplier\tactual_infected\tevent_flag\n";
+        out.precision(9);
+        unsigned prevInf = 0xffffffffu;
+        unsigned seqId = 0u;
+        for (const auto& rec : infEpRecorded) {
+            const unsigned u = rec.infectorId;
+            if (u >= nAgents || u >= infEpIndexDay.size()) continue;
+            // Lock the index day to the first observed infection. A later reinfection overwrites
+            // agentStats.infectedTimestamp; using that timestamp would drop the original index case.
+            const int iday = infEpIndexDay[u];
+            if (iday < 1 || iday > 10) continue;
+            if (rec.day < iday || rec.day > iday + 14) continue;
+            if (u != prevInf) {
+                prevInf = u;
+                seqId = 0u;
+            }
+            ++seqId;
+            unsigned actual = 0u;
+            for (const auto& ce : rec.childEvents) {
+                const int cday = static_cast<int>(ce.second / infEpStepsPerDay);
+                if (cday >= iday && cday <= iday + 14) ++actual;
+            }
+            out << u << '\t' << seqId << '\t' << rec.day << '\t' << rec.venueId << '\t' << rec.venueType << '\t'
+                << (rec.venueType == 2u ? "household" : "other") << '\t' << rec.durationHours << '\t'
+                << rec.susceptiblesPresent << '\t' << rec.expectedInfectionsMult1 << '\t' << rec.realisedMultiplier << '\t'
+                << actual << '\t' << rec.eventFlag << '\n';
         }
     }
 
@@ -1351,7 +1674,8 @@ public:
         thrust::fill(infectionRatios.begin(), infectionRatios.end(), 0.0);
         thrust::fill(fullInfectedCounts.begin(), fullInfectedCounts.end(), 0.0f);
 
-        bool recordNewInfections = flagInfectionAtLocations || !infectionTracePath.empty() || !episodeTracePath.empty();
+        bool recordNewInfections = flagInfectionAtLocations || !infectionTracePath.empty() || !episodeTracePath.empty()
+                                   || !infectiousEpisodeLogPath.empty();
         if (recordNewInfections) {
             if (infectionFlagAtLocations.size() == 0) infectionFlagAtLocations.resize(infectiousness.size());
             thrust::fill(infectionFlagAtLocations.begin(), infectionFlagAtLocations.end(), false);
@@ -1439,8 +1763,9 @@ public:
             traitSusceptibility.empty() ? nullptr : thrust::raw_pointer_cast(traitSusceptibility.data()),
             peakMode,
             getSheddingMeanPtr());
-        if (!infectionTracePath.empty() || !episodeTracePath.empty()) attributeInfectors(variant);
+        if (!infectionTracePath.empty() || !episodeTracePath.empty() || !infectiousEpisodeLogPath.empty()) attributeInfectors(variant);
         if (!episodeTracePath.empty()) writeEpisodes();
+        if (!infectiousEpisodeLogPath.empty()) recordBackgroundInfectiousEpisodes(simTime, timeStep, variant);
         if (eventGroupSize > 0 && realThis->locs->eventRate > 0.0) runGroupEvents(simTime, timeStep, variant);
         if (flagInfectionAtLocations) {
             thrust::device_vector<unsigned> fullInfectedCounts2(fullInfectedCounts.size(), 0);

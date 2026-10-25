@@ -330,14 +330,15 @@ namespace RealMovementOps {
     [[nodiscard]] inline HD bool isHighType(unsigned t, unsigned mask) { return t < 32u && ((mask >> t) & 1u); }
 
     // Chance of event j of a window for an agent outside the class when the scene is minority-dominated: the chances of the
-    // high-L types are multiplied by s and the home event takes up the difference. A window without a home event is unchanged.
-    [[nodiscard]] inline HD float hviOthersChance(const AgentTypeList::Event* ev, unsigned begin, unsigned num, unsigned j, float s, unsigned homeType, unsigned mask) {
-        const float c = ev[begin + j].chance;
+    // high-L types are multiplied by s (on top of the agent's hviEffectiveChance scaling by u) and the home event takes up
+    // the difference. A window without a home event is unchanged.
+    [[nodiscard]] inline HD float hviOthersChance(const AgentTypeList::Event* ev, unsigned begin, unsigned num, unsigned j, float u, float s, unsigned homeType, unsigned mask) {
+        const float c = hviEffectiveChance(ev, begin, num, j, u, homeType);
         float sumHigh = 0.0f;
         int homeIdx = -1;
         for (unsigned k = 0; k < num; ++k) {
             const unsigned t = ev[begin + k].locationType;
-            if (isHighType(t, mask)) sumHigh += ev[begin + k].chance;
+            if (isHighType(t, mask)) sumHigh += hviEffectiveChance(ev, begin, num, k, u, homeType);
             else if (t == homeType && homeIdx < 0) homeIdx = static_cast<int>(k);
         }
         if (homeIdx < 0 || !(sumHigh > 0.0f)) return c;
@@ -822,7 +823,7 @@ namespace RealMovementOps {
                     hviU = a.hviMultPtr[i];
                 const bool othersScene = a.hviOthersHighScale != 1.0f && a.hviClassPtr != nullptr && a.hviClassPtr[i] == 0
                                          && ((a.hviStatesMask >> static_cast<unsigned>(wBState)) & 1u);
-                double threshhold = othersScene ? RealMovementOps::hviOthersChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, 0, a.hviOthersHighScale, a.homeType, a.hviHighMask)
+                double threshhold = othersScene ? RealMovementOps::hviOthersChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, 0, hviU, a.hviOthersHighScale, a.homeType, a.hviHighMask)
                                     : hviU == 1.0f ? a.eventsPtr[activeEventsBegin].chance
                                                    : RealMovementOps::hviEffectiveChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, 0, hviU, a.homeType);
                 unsigned idx = 0;
@@ -830,7 +831,7 @@ namespace RealMovementOps {
                     idx++;
                     if (othersScene) {
                         if (idx < numPotentialEvents)
-                            threshhold += RealMovementOps::hviOthersChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, idx, a.hviOthersHighScale, a.homeType, a.hviHighMask);
+                            threshhold += RealMovementOps::hviOthersChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, idx, hviU, a.hviOthersHighScale, a.homeType, a.hviHighMask);
                     } else if (hviU == 1.0f) threshhold += a.eventsPtr[activeEventsBegin + idx].chance;
                     else if (idx < numPotentialEvents)
                         threshhold += RealMovementOps::hviEffectiveChance(a.eventsPtr, activeEventsBegin, numPotentialEvents, idx, hviU, a.homeType);

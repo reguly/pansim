@@ -1,0 +1,47 @@
+# 82. Round 16: instructions for the simulation-running agent
+
+Date: 25 October 2026. Results prefix 83_. Written for the agent that runs PanSim. As in earlier rounds, review these instructions before running, record any error in them (in a file 82a_review_of_note82.md), state the predictions as registered, and copy large files to the project Drive folder manually. Nothing here changes a mechanism that earlier rounds fixed; runs C and D repair or audit known issues, runs A and B repeat calibration with larger or equalised ensembles, runs E to H add measurements and recomputations. Common rules unless a run says otherwise: enlarged map, venue profile off, day-28 calibration to 6,211.25 infections within 3% by the same secant loop with the same trial limit of five, seeds as stated, index cases infected on days 1 to 10 with a known infector, offspring within 14 days, the same output tables as round 15 (per-replicate offspring histograms, infection files for every replicate), byte-identity checks with every new option off reported for every code change, and a description of every code change (file, function, line count) in the results report. Do not extend a protocol silently; if a calibration needs more trials than the limit, stop, report it, and run the extension only as a labelled extra.
+
+## Run E: episode-level export for the composition analysis (no new mechanism)
+
+Re-run, with the round-15 coefficients and seeds 77001 to 77012, the world-1, world-2b and world-3b cells at density exponent 1 and the world-1 cells at exponents 0.5 and 0 (five cells). Their offspring histograms must equal the round-15 histograms in every bin; if they do not, report the difference and stop on that cell. Add one export per cell: for every index case, one row per infectious episode within its first 14 days of infectiousness (an episode is one stay at one venue in one time window): infector id, replicate, episode id, day, venue id, venue type, duration in hours, number of susceptible agents present, the expected number of infections of the episode at multiplier 1 (the sum over the susceptibles present of the infection probability the kernel gives, computed before the multiplier is applied; world 3b: also with the event hazard where the episode is an event), the realised multiplier, the number actually infected, and for world 3b an event flag. Add the household-versus-other label of the venue.
+
+Registered predictions (thresholds fixed now). E (a): the concentration index H, defined per cell as the sum over index cases of the squared episode weights over the sum of the squared total weights, lies between 0.65 and 0.90 in world 1 at exponent 1 and between 0.85 and 1.00 at exponent 0. E (b): the formula 1 + 1/k = (1 + c_T)(1 + c_m H), with c_T the squared coefficient of variation of the per-index-case total weight, c_m of the realised multiplier and H as measured, reproduces the observed moment k within 10% in the five cells. E (c): the median number of susceptibles present at an infecting home episode is at most 3 and at an infecting episode at the four risky types and long shops at least 10. E (d): in world 3b the share of index cases with at least one event episode while infectious is at most 0.12, and the mean number of infections per event-bearing index case is at least 8.
+
+## Run A: calibration on 36 replicates, events world
+
+Calibrate world 3b (B1 mechanism: event rate 0.17 to be taken from the round-14 B1 cell, group 30, factor 3,000) three times, independently, on three disjoint 12-seed sets (88001 to 88012, 88013 to 88024, 88025 to 88036), each to day 28 within 3% by the secant loop, and once on all 36 seeds (88001 to 88036). Evaluate each of the four coefficients on all 36 seeds. Report each coefficient, the day-28 count on its own and on all 36 seeds, the likelihood k, the moment k, the zero-share gap, the Delaporte baseline share and the early reproduction number, with 90% replicate-bootstrap intervals (at least 1,000 resamples; also report the jackknife-t interval).
+
+Registered predictions. A (a): the three 12-seed coefficients differ from each other by more than 4% between the largest and the smallest. A (b): the 36-seed coefficient lies within 4% of the mean of the three 12-seed coefficients. A (c): the likelihood k of the 36-seed cell lies within 0.03 of 0.248. A (d): the zero-share gap of the 36-seed cell lies between -3.3 and -2.5.
+
+## Run B: the published-mean comparison with equal effort
+
+Redo the round-14 B2 cells (published mean offspring 0.88 within 3% and likelihood k 0.27) for worlds 1, 2b and 3b on 36 replicates each (seeds 89001 to 89036) with the same rule for all three: up to five calibration trials on the first 12 seeds, then, if the mean is outside 3%, up to four further trials, then stop; report every trial. Report mean offspring, likelihood and moment k, the zero-share gap, the shares with no, one to five and more than five offspring, the maximum offspring count and the maximum expected from a negative binomial with the cell's own mean and k.
+
+Registered predictions. B (a): each world reaches mean offspring within 3% of 0.88 within nine trials. B (b): the three maxima differ by less than a factor of 2 (round 14: 28, 54 and 40). B (c): the zero-share gap of world 3b lies between -2.6 and -2.0.
+
+## Run C: exclusive-scene coding quirk
+
+Repair the coding of the exclusive scene so that the scene flag composes with the mean-preserving mobility factor instead of replacing it (report the code change). With every other option off, byte-identity of the S8-1, S8-2 and S8-4 arms to the delivered ones must hold. Re-run the S8-3 arms at venue risk 10 and 30 (12 replicates, seeds 77001 to 77012, calibration to day 28) and their control experiments of Table 5.14b (capTop, scaleAll and close, with hours removed measured in the infection runs and not estimated from movement-only runs) and for comparison the S8-2 arm at tilt 1 and venue risk 30 with the same controls. Report non-class discretionary hours before and after the repair.
+
+Registered predictions. C (a): after the repair the non-class mean discretionary hours are within 3% of baseline (before: 37% below). C (b): capTop and scaleAll differ in infections averted per 1,000 hours by more than 10% in the S8-3 arm at venue risk 10. C (c): the moment k of the S8-3 arm at venue risk 10 is above its previous value of 0.85.
+
+## Run D: reinfection trace audit
+
+Repeat the original-map PS1 arms A0, E and P0 (the 10-week arms of Section 5.3) and, on the enlarged map, the world-1 B1 cell, with the episode-trace log on for every infection (so that a reinfection does not overwrite the first record). Report, per arm and day, the share of infected agents infected at least twice, the number of first-infection records that the single-trace pipeline would have lost by day 70 and day 112, and the window-cohort moment k and the zero share recomputed from first infections only, against the values from the single-trace pipeline. Registered predictions. D (a): at most 2% of infected agents are infected twice by day 112 in the PS1 arms. D (b): the window-cohort likelihood k differs between the two pipelines by at most 5% in every window and arm.
+
+## Run F: one canonical computation of the cluster statistics
+
+Write one script that computes, for any cell, the statistics of the ten largest clusters per replicate (share in one venue-day, same-household share, distinct venues, mean offspring) with a deterministic tie-break (offspring descending, then infector id ascending) and the same index-case filter, and apply it to all cells of Tables 5.16b and 5.16f (round 11 and 13 per-replicate files), the all-detected arms of Table 5.17a, Table 5.19b and Table 5.22a. Deliver a table of the new values against the previously delivered values. Registered prediction F (a): every difference is at most 0.6 percentage points in the shares and at most 0.2 in distinct venues. Also state which tables had used which script.
+
+## Run G: hours reconciliation
+
+From a movement-only run (two weeks, seeds 77001 to 77012), deliver for the class of the round-8 design (5% of eligible agents, hours multiplier 3) at tilt 0, 0.5 and 1, and for everyone else: total discretionary hours, hours at the four risky types and the denominators used for the figures 3.40, 1.87, 53.5%, 9.88, 5.90 and 59.1% of Section 5.14, stating the population (all agents, adults, eligible agents) each one refers to. Registered prediction G (a): total class discretionary hours at tilt 0, 0.5 and 1 differ by at most 3%. If they do not, say how the tilt changes the total.
+
+## Run H: replicate-level files for model comparison
+
+For every cell of Tables 5.20a and 5.20b and Table 5.22a deliver the offspring histogram per replicate (replicate id, number of index cases, counts of index cases by number of offspring up to the maximum), as one csv with a cell column. No new runs. The drafting side will fit the negative binomial, Delaporte and Poisson-lognormal families per replicate and report the per-replicate gains and a leave-one-replicate-out cross-validated log-likelihood.
+
+## Deliverables
+
+83_round16_results.md (a table per run, the predictions with outcomes, a list of code changes and of errors found in these instructions), the csv files named by run (83_e_episodes.csv per cell or compressed, 83_a_*.csv, 83_b_*.csv, 83_c_*.csv, 83_d_*.csv, 83_f_diff.csv, 83_g_hours.csv, 83_h_replicate_histograms.csv), and a short statement of what was not run.
