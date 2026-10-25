@@ -1,0 +1,19 @@
+binary,arm,intervention,replicates,infections_day84_none,infections_day84,infections_averted,disc_hours_removed,high_L_hours_removed,averted_per_1000_disc_hours,averted_per_1000_high_L_hours,scale_param,hours_source,cap_over_scale_per_1000_disc,cap_scale_differ_by_more_than_10pct
+before,s8_3_L10,capTop,12,29625.4,9155.58,20469.8,3.09504e+06,3.14306e+06,6.61375,6.51272,,seed 77001 12-week infection mobility log,0.996295,0
+before,s8_3_L10,scaleAll,12,29625.4,9039.08,20586.3,3.10112e+06,3.15261e+06,6.63835,6.52994,0.3263,seed 77001 12-week infection mobility log,0.996295,0
+before,s8_3_L10,close,12,29625.4,4703.5,24921.9,7.61694e+06,8.91813e+06,3.27191,2.79452,,seed 77001 12-week infection mobility log,0.996295,0
+before,s8_3_L30,capTop,12,22532.6,6796.75,15735.8,3.11397e+06,3.14489e+06,5.0533,5.00361,,seed 77001 12-week infection mobility log,,
+before,s8_3_L30,scaleAll,12,22532.6,6797.33,15735.2,3.12685e+06,3.15646e+06,5.0323,4.9851,0.3263,seed 77001 12-week infection mobility log,,
+before,s8_3_L30,close,12,22532.6,3678.5,18854.1,7.6455e+06,8.92191e+06,2.46604,2.11323,,seed 77001 12-week infection mobility log,,
+before,s8_2_t1_L30,capTop,12,51872.6,15680.2,36192.3,2.91396e+06,2.99377e+06,12.4203,12.0892,,seed 77001 12-week infection mobility log,,
+before,s8_2_t1_L30,scaleAll,12,51872.6,47471.6,4401,2.92511e+06,1.47693e+06,1.50456,2.97983,0.9233,seed 77001 12-week infection mobility log,,
+before,s8_2_t1_L30,close,12,51872.6,4221.75,47650.8,1.88872e+07,2.21161e+07,2.52292,2.15458,,seed 77001 12-week infection mobility log,,
+after,s8_3_L10,capTop,12,28539.8,8848.75,19691.1,3.11141e+06,3.14894e+06,6.32866,6.25324,,seed 77001 12-week infection mobility log,10.0941,1
+after,s8_3_L10,scaleAll,12,28539.8,26562.3,1977.5,3.15409e+06,661448,0.626964,2.98965,0.8679,seed 77001 12-week infection mobility log,10.0941,1
+after,s8_3_L10,close,12,28539.8,4656.5,23883.3,7.31756e+06,8.55918e+06,3.26384,2.79038,,seed 77001 12-week infection mobility log,10.0941,1
+after,s8_3_L30,capTop,12,21744.2,6755.75,14988.4,3.13484e+06,3.14867e+06,4.78124,4.76024,,seed 77001 12-week infection mobility log,,
+after,s8_3_L30,scaleAll,12,21744.2,20232.8,1511.33,3.1656e+06,653624,0.477424,2.31224,0.867,seed 77001 12-week infection mobility log,,
+after,s8_3_L30,close,12,21744.2,3676.33,18067.8,7.34046e+06,8.55502e+06,2.4614,2.11196,,seed 77001 12-week infection mobility log,,
+after,s8_2_t1_L30,capTop,12,51872.6,15680.2,36192.3,2.91396e+06,2.99377e+06,12.4203,12.0892,,seed 77001 12-week infection mobility log,,
+after,s8_2_t1_L30,scaleAll,12,51872.6,47471.6,4401,2.92511e+06,1.47693e+06,1.50456,2.97983,0.9233,seed 77001 12-week infection mobility log,,
+after,s8_2_t1_L30,close,12,51872.6,4221.75,47650.8,1.88872e+07,2.21161e+07,2.52292,2.15458,,seed 77001 12-week infection mobility log,,
