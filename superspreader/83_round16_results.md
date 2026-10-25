@@ -147,8 +147,8 @@ The published figures and which total they are:
 
 ## Run H
 
-`83_h_replicate_histograms.csv`, 15,762 rows, 1,053,222 bytes. Every cell of `70_delaporte_fits_A.csv` (Table 5.20a, 12 cells), `70_delaporte_fits_B.csv` (Table 5.20b, 10 cells) and `74_d_cells_summary.csv` (Table 5.22a, 9 cells). Columns: table, cell, source file, replicate, seed, number of index cases in the replicate, offspring, count of index cases. Offspring runs from 0 to the replicate maximum, including bins with count 0. No new runs. No cell was missing from the stored histogram files.
+`83_h_replicate_histograms.csv`, 15,762 rows, 1,053,222 bytes. The Drive copy is `83_h_replicate_histograms.csv.gz` (64,999 bytes), the gzip of that csv. Every cell of `70_delaporte_fits_A.csv` (Table 5.20a, 12 cells), `70_delaporte_fits_B.csv` (Table 5.20b, 10 cells) and `74_d_cells_summary.csv` (Table 5.22a, 9 cells). Columns: table, cell, source file, replicate, seed, number of index cases in the replicate, offspring, count of index cases. Offspring runs from 0 to the replicate maximum, including bins with count 0. No new runs. No cell was missing from the stored histogram files.
 
 ## Files
 
-`83_e_hist_diff.csv`, `83_a_trials.csv`, `83_a_summary.csv`, `83_b_trials.csv`, `83_b_summary.csv`, `83_f_diff.csv`, `83_g_hours.csv`, `83_h_replicate_histograms.csv`.
+`83_e_hist_diff.csv`, `83_a_trials.csv`, `83_a_summary.csv`, `83_b_trials.csv`, `83_b_summary.csv`, `83_f_diff.csv`, `83_g_hours.csv`, `83_h_replicate_histograms.csv` (Drive: `83_h_replicate_histograms.csv.gz`).
