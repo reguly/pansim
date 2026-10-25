@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -276,14 +277,26 @@ def mobility_totals(path):
     return disc, high
 
 
-def run_controlled(which, arm, mode, k, arm_flags, job, closures=None, scale=None, reps=12, mobility_reps=(1,)):
+def run_mixed(items):
+    """Run (name, args, job) together. Jobs may use different location files. Two processes at a time."""
+    def one(item):
+        name, args, job = item
+        return run_x21.run_job(name, args, **job)
+    if r6.JOBS <= 1:
+        codes = [one(item) for item in items]
+    else:
+        with ThreadPoolExecutor(max_workers=r6.JOBS) as pool:
+            codes = list(pool.map(one, items))
+    if any(codes):
+        raise SystemExit(f"a job failed: {codes}")
+
+
+def control_item(which, arm, mode, k, arm_flags, job, closures=None, scale=None, reps=12, mobility_reps=(1,)):
     """12-week infection runs. Seed 77001 (rep 01) also writes the mobility log used for hours."""
     import run_round8 as r8
-    bind_results()
-    label = f"C/{which}/{arm}/{mode}"
-    batch = []
+    items = []
     for i, seed in enumerate(r8.seeds8(reps), start=1):
-        name = f"{label}/rep{i:02d}"
+        name = f"C/{which}/{arm}/{mode}/rep{i:02d}"
         flags = control_flags(arm_flags, mode, scale)
         flags += ["--hviDump", str(RESULTS / name / "hvi.csv")]
         if i in mobility_reps:
@@ -291,63 +304,100 @@ def run_controlled(which, arm, mode, k, arm_flags, job, closures=None, scale=Non
         args = r6.base_args(k, seed, C_WEEKS, flags)
         if closures is not None:
             args[args.index("--closures") + 1] = str(closures)
-        batch.append((name, args))
-    r6.run_many(batch, job)
-    return RESULTS / label / "rep01" / "mobility.csv"
+        items.append((name, args, job))
+    return items
 
 
-def fit_scale(which, arm, k, arm_flags, job, base_disc, target_removed):
-    """At most five 12-week infection trials on seed 77001. Match capTop's discretionary hours removed."""
+def _scale_step(spec, s_run, removed):
+    trials = spec["trials"]
+    if len(trials) >= 1 and removed != trials[-1]["disc_removed"]:
+        prev = trials[-1]
+        span = removed - prev["disc_removed"]
+        s = s_run + (spec["target"] - removed) * (s_run - prev["scale"]) / span
+    elif removed < spec["target"]:
+        s = s_run * 0.7
+    else:
+        s = s_run + 0.5 * (1.0 - s_run)
+    return min(1.0, max(0.0, s))
+
+
+def _close_scale(which, spec, matched):
+    trials = spec["trials"]
+    best = min(trials, key=lambda row: abs(row["disc_removed"] - spec["target"]))
+    chosen = best["scale"]
+    if matched:
+        chosen = trials[-1]["scale"]
+    stored = {"done": True, "scale": chosen, "matched": matched, "trials": trials, "target_removed": spec["target"]}
+    r16.save(STATE / f"c_scale_{which}_{spec['arm']}.json", stored)
+    print(f"R17 C scale {which} {spec['arm']} s={chosen:.4f} matched={matched}", flush=True)
+    return stored
+
+
+def fit_scales(which, specs):
+    """Up to five 12-week infection trials per arm, on seed 77001, run two arms at a time."""
     import run_round8 as r8
     bind_results()
-    log_path = STATE / f"c_scale_{which}_{arm}.json"
-    if log_path.exists():
-        stored = json.loads(log_path.read_text())
-        if stored.get("done"):
-            print(f"R17 C scale {which} {arm} cached s={stored['scale']:.4f}", flush=True)
-            return stored
-    else:
-        stored = {"trials": []}
-    trials = stored["trials"]
-    s = trials[-1]["next_s"] if trials else C_SCALE0[arm]
-    while len(trials) < 5:
-        s_run = min(1.0, max(0.0, float(f"{s:.4f}")))
-        name = f"C/{which}/{arm}/scale_search/i{len(trials) + 1:02d}"
-        flags = control_flags(arm_flags, "scaleAll", s_run)
-        flags += ["--hviDump", str(RESULTS / name / "hvi.csv"), "--mobilityLog", str(RESULTS / name / "mobility.csv")]
-        seed = r8.seeds8(1)[0]
-        r6.run_many([(name, r6.base_args(k, seed, C_WEEKS, flags))], job)
-        disc, high = mobility_totals(RESULTS / name / "mobility.csv")
-        removed = base_disc - disc
-        row = {"iteration": len(trials) + 1, "scale": s_run, "disc_hours": disc, "high_hours": high, "disc_removed": removed}
-        if target_removed > 0 and abs(removed - target_removed) <= 0.03 * target_removed:
-            row["accepted"] = True
-            trials.append(row)
-            stored = {"done": True, "scale": s_run, "trials": trials, "target_removed": target_removed}
-            r16.save(log_path, stored)
-            print(f"R17 C scale {which} {arm} s={s_run:.4f} removed={removed:.4g} target={target_removed:.4g}", flush=True)
-            return stored
-        if len(trials) >= 1 and removed != trials[-1]["disc_removed"]:
-            prev = trials[-1]
-            span = removed - prev["disc_removed"]
-            s = s_run + (target_removed - removed) * (s_run - prev["scale"]) / span
-        elif removed < target_removed:
-            s = s_run * 0.7
+    results = {}
+    active = []
+    for spec in specs:
+        log_path = STATE / f"c_scale_{which}_{spec['arm']}.json"
+        if log_path.exists():
+            stored = json.loads(log_path.read_text())
+            if stored.get("done"):
+                print(f"R17 C scale {which} {spec['arm']} cached s={stored['scale']:.4f}", flush=True)
+                results[spec["arm"]] = stored
+                continue
+            spec["trials"] = stored.get("trials", [])
+            spec["s"] = spec["trials"][-1]["next_s"] if spec["trials"] else C_SCALE0[spec["arm"]]
         else:
-            s = s_run + 0.5 * (1.0 - s_run)
-        s = min(1.0, max(0.0, s))
-        row["next_s"] = s
-        row["accepted"] = False
-        trials.append(row)
-        r16.save(log_path, {"done": False, "trials": trials, "target_removed": target_removed})
-        print(f"R17 C scale {which} {arm} trial {row['iteration']} s={s_run:.4f} removed={removed:.4g} next={s:.4f}", flush=True)
-        if abs(s - s_run) < 5e-5:
+            spec["trials"] = []
+            spec["s"] = C_SCALE0[spec["arm"]]
+        active.append(spec)
+    seed = r8.seeds8(1)[0]
+    while active:
+        items = []
+        planned = []
+        finished = []
+        for spec in active:
+            if len(spec["trials"]) >= 5:
+                finished.append(spec)
+                continue
+            s_run = min(1.0, max(0.0, float(f"{spec['s']:.4f}")))
+            name = f"C/{which}/{spec['arm']}/scale_search/i{len(spec['trials']) + 1:02d}"
+            flags = control_flags(spec["flags"], "scaleAll", s_run)
+            flags += ["--hviDump", str(RESULTS / name / "hvi.csv"), "--mobilityLog", str(RESULTS / name / "mobility.csv")]
+            items.append((name, r6.base_args(spec["k"], seed, C_WEEKS, flags), spec["job"]))
+            planned.append((spec, s_run, name))
+        for spec in finished:
+            results[spec["arm"]] = _close_scale(which, spec, False)
+        active = [spec for spec in active if spec not in finished]
+        if not items:
             break
-    best = min(trials, key=lambda row: abs(row["disc_removed"] - target_removed))
-    stored = {"done": True, "scale": best["scale"], "matched": False, "trials": trials, "target_removed": target_removed}
-    r16.save(log_path, stored)
-    print(f"R17 C scale {which} {arm} NOT within 3%; closest s={best['scale']:.4f}", flush=True)
-    return stored
+        run_mixed(items)
+        still = []
+        for spec, s_run, name in planned:
+            disc, high = mobility_totals(RESULTS / name / "mobility.csv")
+            removed = spec["base_disc"] - disc
+            row = {"iteration": len(spec["trials"]) + 1, "scale": s_run, "disc_hours": disc, "high_hours": high, "disc_removed": removed}
+            hit = spec["target"] > 0 and abs(removed - spec["target"]) <= 0.03 * spec["target"]
+            if hit:
+                row["accepted"] = True
+                spec["trials"].append(row)
+                results[spec["arm"]] = _close_scale(which, spec, True)
+                continue
+            nxt = _scale_step(spec, s_run, removed)
+            row["next_s"] = nxt
+            row["accepted"] = False
+            spec["trials"].append(row)
+            spec["s"] = nxt
+            r16.save(STATE / f"c_scale_{which}_{spec['arm']}.json", {"done": False, "trials": spec["trials"], "target_removed": spec["target"]})
+            print(f"R17 C scale {which} {spec['arm']} trial {row['iteration']} s={s_run:.4f} removed={removed:.4g} next={nxt:.4f}", flush=True)
+            if abs(nxt - s_run) < 5e-5 or len(spec["trials"]) >= 5:
+                results[spec["arm"]] = _close_scale(which, spec, False)
+            else:
+                still.append(spec)
+        active = still
+    return results
 
 
 def run_c():
@@ -372,20 +422,34 @@ def run_c():
             stored = r6.match(label, make, C_K0[arm], r8.seeds8(12), 4, 6211.25, r8.job_of(arm), max_rounds=5)
             calibrated[arm] = stored
             print(f"R17 C {which} {arm} k={stored['k']:.6g} day28={stored['day28']:.1f} matched={stored['matched']}", flush=True)
+        items = []
+        specs = []
         for arm in C_ARMS:
             k = calibrated[arm]["k"]
             flags = r8.ARMS[arm]["flags"]
             job = r8.job_of(arm)
             close = close_dir / f"close_{arm}.json"
             r8.write_close((5, 6, 9, 10), close)
-            run_controlled(which, arm, "none", k, flags, job)
-            run_controlled(which, arm, "capTop", k, flags, job)
-            run_controlled(which, arm, "close", k, flags, job, closures=close)
-            base_disc, _ = mobility_totals(RESULTS / f"C/{which}/{arm}/none/rep01/mobility.csv")
-            cap_disc, _ = mobility_totals(RESULTS / f"C/{which}/{arm}/capTop/rep01/mobility.csv")
-            fit = fit_scale(which, arm, k, flags, job, base_disc, base_disc - cap_disc)
-            run_controlled(which, arm, "scaleAll", k, flags, job, scale=fit["scale"])
-            r16.save(STATE / f"c_{which}_{arm}_runs.json", {"k": k, "matched": calibrated[arm]["matched"], "day28": calibrated[arm]["day28"], "scale": fit["scale"], "binary": str(binary)})
+            items += control_item(which, arm, "none", k, flags, job)
+            items += control_item(which, arm, "capTop", k, flags, job)
+            items += control_item(which, arm, "close", k, flags, job, closures=close)
+            specs.append({"arm": arm, "k": k, "flags": flags, "job": job, "matched": calibrated[arm]["matched"], "day28": calibrated[arm]["day28"]})
+        run_mixed(items)
+        for spec in specs:
+            base_disc, _ = mobility_totals(RESULTS / f"C/{which}/{spec['arm']}/none/rep01/mobility.csv")
+            cap_disc, _ = mobility_totals(RESULTS / f"C/{which}/{spec['arm']}/capTop/rep01/mobility.csv")
+            spec["base_disc"] = base_disc
+            spec["target"] = base_disc - cap_disc
+        fits = fit_scales(which, specs)
+        scale_items = []
+        for spec in specs:
+            scale_items += control_item(which, spec["arm"], "scaleAll", spec["k"], spec["flags"], spec["job"], scale=fits[spec["arm"]]["scale"])
+        run_mixed(scale_items)
+        for spec in specs:
+            r16.save(STATE / f"c_{which}_{spec['arm']}_runs.json", {
+                "k": spec["k"], "matched": spec["matched"], "day28": spec["day28"],
+                "scale": fits[spec["arm"]]["scale"], "binary": str(binary),
+            })
 
 
 def run_d():

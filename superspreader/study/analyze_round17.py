@@ -552,17 +552,22 @@ def run_d_analysis():
         first_pool = {w: [] for w in windows}
         single_pool = {w: [] for w in windows}
         for rep in reps:
-            days = infection_days(load_episodes(rep / "episodes.tsv"))
-            firsts = []
-            seconds = []
+            episodes = load_episodes(rep / "episodes.tsv")
+            days = infection_days(episodes)
+            first_on = [0] * 113
+            second_on = [0] * 113
             for agent_days in days.values():
-                firsts.append(agent_days[0])
-                if len(agent_days) >= 2:
-                    seconds.append(agent_days[1])
+                if 0 <= agent_days[0] <= 112:
+                    first_on[agent_days[0]] += 1
+                if len(agent_days) >= 2 and 0 <= agent_days[1] <= 112:
+                    second_on[agent_days[1]] += 1
+            seen_first = seen_second = 0
             for day in range(113):
-                per_day_infected[day] += sum(1 for d in firsts if d <= day)
-                per_day_twice[day] += sum(1 for d in seconds if d <= day)
-            first = first_events(load_episodes(rep / "episodes.tsv"))
+                seen_first += first_on[day]
+                seen_second += second_on[day]
+                per_day_infected[day] += seen_first
+                per_day_twice[day] += seen_second
+            first = first_events(episodes)
             single = load_single(rep / "trace.tsv")
             for window in windows:
                 first_pool[window].extend(offspring_counts(first, *window))
