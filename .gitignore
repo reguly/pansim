@@ -35,4 +35,6 @@ experiments/hcw_interventions/outputs/
 
 # Confidential Hungarian HCW data (NDA)
 experiments/validation_1yr/data/hungarian_data/
-experiments/hcw_interventions/ODE/kalibráció_kimenet/
+experiments/hcw_interventions/ODE/kalibracio_kimenet/
+experiments/hcw_interventions/ODE/egyenletek/
+experiments/hcw_interventions/ODE/egyenletek_kepek/
