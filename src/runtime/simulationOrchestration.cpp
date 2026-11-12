@@ -488,7 +488,7 @@ Simulation<PositionType,
             data.acquireProgressionMatrices(),
             data.acquireLocationTypes());
         RandomGenerator::resize(agents->PPValues.size());
-        statesHeader = header + "H\tT\tP1\tP2\tQ\tQT\tNQ\tMUT\tHOM\tVAC\tNI\tINF\tREINF\tBSTR\tIMM\tHCI\tHCE\tINFV\tINFH\tVNI";
+        statesHeader = header + "H\tT\tP1\tP2\tQ\tQT\tNQ\tMUT\tHOM\tVAC\tNI\tINF\tREINF\tBSTR\tIMM\tHCI\tHCE\tINFV\tINFH\tVNI\tHCWH\tHCWD\tHCWQI\tHCWQN\tHCWU";
         std::cout << statesHeader << '\n';
         auto locTypes = data.acquireLocationTypes();
         homeType = locTypes.home;
@@ -722,7 +722,40 @@ std::vector<unsigned> Simulation<PositionType,
     });
     stats.push_back(vaccNotInf);
     if (print) {
-        std::cout << vaccNotInf << '\n';
+        std::cout << vaccNotInf << '\t';
+    }
+
+    // HCI split into mutually exclusive counts of healthcare workers (they sum to the HCI count):
+    // 1 HCWH  - hospitalized (infected, WBState S)
+    // 2 HCWD  - diagnosed and isolating (incl. recovered agents whose post-diagnosis isolation runs)
+    // 3 HCWQI - contact-quarantined, infected but not diagnosed
+    // 4 HCWQN - contact-quarantined, not infected
+    // 5 HCWU  - infected, undiagnosed, not quarantined (still working)
+    auto hciBegin = thrust::make_zip_iterator(thrust::make_tuple(
+        healthcareWorker.begin(), ppstates.begin(), quarantined.begin(), diagnosed.begin(), agentStats.begin()));
+    auto hciEnd = thrust::make_zip_iterator(
+        thrust::make_tuple(healthcareWorker.end(), ppstates.end(), quarantined.end(), diagnosed.end(), agentStats.end()));
+    for (unsigned category = 1; category <= 5; category++) {
+        unsigned count = thrust::count_if(hciBegin, hciEnd, [category] HD(thrust::tuple<bool, PPState, bool, bool, AgentStats> tup) {
+            if (!thrust::get<0>(tup)) return false;
+            PPState state = thrust::get<1>(tup);
+            bool infected = state.isInfected();
+            bool inQuarantine = thrust::get<2>(tup);
+            AgentStats agentStat = thrust::get<4>(tup);
+            // quarantine started at the diagnosis (the diagnosis timestamp may be shifted by one step at midnight)
+            bool isolatingAfterDiagnosis = inQuarantine && agentStat.diagnosedTimestamp > 0
+                                           && agentStat.diagnosedTimestamp + 1 >= agentStat.quarantinedTimestamp;
+            unsigned c = 5;
+            if (!infected && !inQuarantine) c = 0;
+            else if (infected && state.getWBState() == states::WBStates::S) c = 1;
+            else if ((infected && thrust::get<3>(tup)) || isolatingAfterDiagnosis) c = 2;
+            else if (inQuarantine) c = infected ? 3 : 4;
+            return c == category;
+        });
+        stats.push_back(count);
+        if (print) {
+            std::cout << count << (category < 5 ? '\t' : '\n');
+        }
     }
 
     return stats;

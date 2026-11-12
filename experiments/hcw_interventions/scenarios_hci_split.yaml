@@ -1,0 +1,13 @@
+# Re-run with the HCI split columns (HCWH, HCWD, HCWQI, HCWQN, HCWU - see
+# src/runtime/simulationOrchestration.cpp) for the quarantine question. Use a separate results
+# root so that the existing results stay untouched, e.g.:
+#   RESULTS_ROOT=experiments/hcw_interventions/results_hci_split \
+#   SCENARIOS_FILE=experiments/hcw_interventions/scenarios_hci_split.yaml \
+#   ./experiments/hcw_interventions/run_scenarios.sh
+# "baseline" is re-run here (not copied), because the old baseline has no split columns.
+# Same flags as in scenarios.yaml.
+
+baseline: ""
+hcwNoQuarantine: "--hcwQuarantineExemptFrom 0"
+hcwNoQuarantineMar21: "--hcwQuarantineExemptFrom 183"
+quarantine0: "--quarantinePolicy 0"
