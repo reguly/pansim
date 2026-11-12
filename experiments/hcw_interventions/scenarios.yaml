@@ -79,6 +79,17 @@ longQuarantine: "--quarantineLength 21"
 # PPE" for the full justification and caveats. REQUIRES REBUILDING build/panSim before running.
 hcwPPE: "--closures inputConfigFiles/closureJun6_real_later3_delta_omicronBA2_earlier8_hospitalPPE.json"
 
+# Professor feedback: "take HCW quarantining out of the simulation and see what happens". New
+# --hcwQuarantineExemptFrom <day> flag (include/policies/movementPolicies.h, quarantineAgent):
+# from that day on, an undiagnosed healthcare worker is never put into contact quarantine
+# (household/work/classroom), i.e. contacts are called in to work. Diagnosed HCWs still isolate.
+# Vaccinated HCWs were already exempt (quarantineImmuneActive=false), so this mainly matters before
+# the HCW vaccination campaign (days ~94-130). REQUIRES REBUILDING build/panSim before running.
+hcwNoQuarantine: "--hcwQuarantineExemptFrom 0"
+# Same, but only from 2021-03-25 (day 183): tests whether a "call everyone in" policy at the
+# 3rd-wave peak could produce the sharp drop in the SZTE absence curve on 2021-03-25..28.
+hcwNoQuarantineMar21: "--hcwQuarantineExemptFrom 183"
+
 # --- later rounds (commented out) ---
 # Daily screening with rapid antigen tests instead of PCR (faster/cheaper/more frequent in
 # reality, typically less sensitive - may give different results than hcwDailyTest's PCR default).

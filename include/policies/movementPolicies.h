@@ -169,6 +169,8 @@ namespace RealMovementOps {
         unsigned schoolAgeRestriction;
         bool quarantineImmuneActive;
         bool lockdownNonvaccActive;
+        bool* healthcareWorkerPtr;
+        unsigned hcwQuarantineExemptFromTimestamp;// contact quarantine skipped for HCWs from this step on
     };
 
     template<typename PPState, typename AgentMeta, typename LocationType>
@@ -179,6 +181,8 @@ namespace RealMovementOps {
         quarantineAgent(unsigned i, MovementArguments<PPState, AgentMeta, LocationType>& a, unsigned until, bool quarantineImmuneActive) {
         //No quarantining
         if (a.quarantinePolicy == 0) return;
+        //No quarantine: Healthcare worker who is not diagnosed (contacts are called in to work)
+        if (!a.diagnosedPtr[i] && a.healthcareWorkerPtr[i] && a.timestamp >= a.hcwQuarantineExemptFromTimestamp) return;
         //No quarantine: If "immune" due to previous diagnosis, and we are not quarantining immune
         if (a.agentStatsPtr[i].diagnosedTimestamp > 0 && a.agentStatesPtr[i].isInfected() == false && quarantineImmuneActive == false) return;
         //No quarantine: If "immune" due to vaccination, not currently diagnosed, and we are not quarantining immune
@@ -1390,6 +1394,7 @@ public:
     bool quarantineImmuneActive = false;
     bool lockdownNonvaccActive = false;
     unsigned quarantinePolicy;
+    unsigned hcwQuarantineExemptFrom;
     // add program parameters if we need any, this function got called already
     // from Simulation
     static void addProgramParameters(cxxopts::Options& options) {
@@ -1401,6 +1406,9 @@ public:
             cxxopts::value<unsigned>()->default_value(std::to_string(unsigned(3))))("quarantineLength",
             "Length of quarantine in days",
             cxxopts::value<unsigned>()->default_value(std::to_string(unsigned(10))))
+            ("hcwQuarantineExemptFrom",
+            "Day from which undiagnosed healthcare workers are exempt from contact quarantine (default: never)",
+            cxxopts::value<unsigned>()->default_value(std::to_string(std::numeric_limits<unsigned>::max())))
             ("dumpLocationAgentList",
             "Dump per-location list of agents at each iteration (directory)",
             cxxopts::value<std::string>()->default_value(""))
@@ -1413,6 +1421,7 @@ public:
         tracked = result["trace"].as<unsigned>();
         quarantinePolicy = result["quarantinePolicy"].as<unsigned>();
         quarantineLength = result["quarantineLength"].as<unsigned>();
+        hcwQuarantineExemptFrom = result["hcwQuarantineExemptFrom"].as<unsigned>();
         dumpLocationAgentList = result["dumpLocationAgentList"].as<std::string>();
         dumpLoctypeStat = result["dumpLoctypeStat"].as<std::string>();
         if (dumpLocationAgentList.length()>0) Util::needAgentsSortedByLocation = 1;
@@ -1684,6 +1693,10 @@ public:
         a.schoolAgeRestriction = schoolAgeRestriction;
         a.quarantineImmuneActive = quarantineImmuneActive;
         a.lockdownNonvaccActive = lockdownNonvaccActive;
+        a.hcwQuarantineExemptFromTimestamp = hcwQuarantineExemptFrom == std::numeric_limits<unsigned>::max()
+                                                 ? std::numeric_limits<unsigned>::max()
+                                                 : hcwQuarantineExemptFrom * 24 * 60 / timeStep;
+        a.healthcareWorkerPtr = thrust::raw_pointer_cast(realThis->healthcareWorker.data());
 
         // Location-based data
         thrust::device_vector<unsigned>& locationAgentList = realThis->locs->locationAgentList;
