@@ -45,7 +45,8 @@ SINGLE = ["hcwPPE", "hcwDailyTest", "hiTest", "longQuarantine", "closuresNone",
           "noVaccHCW", "quarantine0", "noVacc"]
 
 # Diverging pair from the key-metrics palette + neutral grey for "not distinguishable".
-PROTECT, HARM, NEUTRAL = "#2a78d6", "#eb6834", "#8a8f98"
+PROTECT, HARM, NEUTRAL = "#2e9e4f", "#d62728", "#8a8f98"
+ARROW_LESS, ARROW_MORE = "#2e9e4f", "#d62728"   # direction arrows: green = lower risk, red = higher risk
 BASE = "#4a4f57"  # baseline reference row
 
 eff = pd.read_csv(out / "uncertainty_effects.csv")
@@ -60,7 +61,7 @@ bl = ci[(ci.scenario == "baseline") & (ci.metric == "hcw_infections")].iloc[0]
 eff.loc["baseline"] = {"ratio": 1.0, "ratio_ci95_lo": bl.mean_ci95_lo / bl["mean"],
                        "ratio_ci95_hi": bl.mean_ci95_hi / bl["mean"]}
 eff = eff.sort_values("ratio")
-LABELS["baseline"] = f"Policies used in the real world: {bl['mean']:,.0f} HCW infections (mean of 20 runs)"
+LABELS["baseline"] = f"Actual policies, calibrated to real data from Szeged: {bl['mean']:,.0f} HCW infections (mean of 20 runs)"
 
 
 def colour(lo, hi):
@@ -120,10 +121,10 @@ ax.set_xticks([0.3, 0.5, 0.7, 1, 1.5, 2])
 ax.set_xticklabels(["0.3", "0.5", "0.7", "1", "1.5", "2"])
 ax.minorticks_off()
 ytop = n + 0.05
-ax.annotate("", xy=(0.34, ytop), xytext=(0.9, ytop), arrowprops=dict(arrowstyle="->", color=PROTECT))
-ax.annotate("", xy=(2.1, ytop), xytext=(1.1, ytop), arrowprops=dict(arrowstyle="->", color=HARM))
-ax.text(0.58, ytop + 0.3, "fewer infections", ha="center", fontsize=11.5, color=PROTECT)
-ax.text(1.55, ytop + 0.3, "more infections", ha="center", fontsize=11.5, color=HARM)
+ax.annotate("", xy=(0.34, ytop), xytext=(0.9, ytop), arrowprops=dict(arrowstyle="->", color=ARROW_LESS))
+ax.annotate("", xy=(2.1, ytop), xytext=(1.1, ytop), arrowprops=dict(arrowstyle="->", color=ARROW_MORE))
+ax.text(0.58, ytop + 0.3, "fewer infections", ha="center", fontsize=11.5, color="black")
+ax.text(1.55, ytop + 0.3, "more infections", ha="center", fontsize=11.5, color="black")
 ax.set_ylim(-0.7, n + 0.55)
 fig.canvas.draw()
 _r = fig.canvas.get_renderer()
@@ -139,7 +140,7 @@ legend_items = [
 ]
 if any(colour(r.ratio_ci95_lo, r.ratio_ci95_hi) == NEUTRAL for sc, r in eff.iterrows() if sc != "baseline"):
     legend_items.append(Line2D([], [], marker="o", color=NEUTRAL, lw=2.5, label="No clear difference: CI spans 1"))
-legend_items.append(Line2D([], [], marker="o", color=BASE, lw=2.5, label="Baseline: real-world policies"))
+legend_items.append(Line2D([], [], marker="o", color=BASE, lw=2.5, label="Baseline: actual policies, calibrated to real data"))
 legend_items.append(Line2D([], [], marker="D", color=POINT, ms=4, lw=0, label="Diamond: mean of 20 runs; bar: 95% CI"))
 legend_items.append(Line2D([], [], color="0.35", lw=1, ls="--", label="Dashed line: ratio of 1"))
 fig.legend(handles=legend_items, loc="lower center", ncol=2, frameon=False, fontsize=11.5, columnspacing=1.2, handlelength=1.8,
@@ -159,7 +160,7 @@ tex = ["\\begin{tabular}{@{}ll@{}}", "\\hline", "ID & Scenario \\\\ \\hline"]
 tex += [f"{sid} & {desc.replace('%', chr(92) + '%')} \\\\" for _, sid, desc in key]
 tex += ["\\hline", "\\end{tabular}"]
 (out / ("forest_plot_all_scenarios.tex" if show_all else "forest_plot_scenarios.tex")).write_text("\n".join(tex) + "\n")
-fig.suptitle("Effect of interventions on healthcare worker infections", fontsize=15, fontweight="bold", y=1 - 0.12 / H)
+fig.suptitle("Effect of interventions on healthcare worker infections", fontsize=15, fontweight="bold", x=0.015, ha="left", y=1 - 0.12 / H)
 name = ("forest_plot_all" if show_all else "forest_plot") + ("_notable" if no_table else "")
 fig.savefig(out / f"{name}.png", dpi=200)
 fig.savefig(out / f"{name}.pdf")
