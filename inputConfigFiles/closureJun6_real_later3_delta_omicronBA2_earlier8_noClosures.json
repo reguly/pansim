@@ -71,6 +71,18 @@
       "locationTypesToClose": []
     },
     {
+      "name": "SchoolAgeRestriction",
+      "conditionType": "afterDays",
+      "threshold": 263,
+      "threshold2": 263,
+      "openAfter": 79,
+      "closeAfter": -1,
+      "parameter": 3,
+      "locationTypesToClose": [
+        3
+      ]
+    },
+    {
       "name": "HolidayMode",
       "conditionType": "afterDays",
       "threshold": 92,
