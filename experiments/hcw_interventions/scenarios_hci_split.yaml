@@ -11,3 +11,22 @@ baseline: ""
 hcwNoQuarantine: "--hcwQuarantineExemptFrom 0"
 hcwNoQuarantineMar21: "--hcwQuarantineExemptFrom 183"
 quarantine0: "--quarantinePolicy 0"
+
+# Round 2 of this batch (ODE scenario comparison). Same build and results root as the four above,
+# so every scenario is compared with THIS baseline (two baseline batches differed by ~3 % - see
+# stochasticity.py). Ordered by priority; at ~1.3 h per scenario a 12 h job does not finish them
+# all - resubmit the same job, scenarios that already have all_runs.tsv are skipped.
+# Restrictions removed but variants and the day-259 testing rule kept (see scenarios.yaml):
+closuresOnlyNone: "--closures inputConfigFiles/closureJun6_real_later3_delta_omicronBA2_earlier8_noClosures.json"
+closuresOnlyNone_hiTest: "--closures inputConfigFiles/closureJun6_real_later3_delta_omicronBA2_earlier8_noClosures.json --testingProbabilities 0.00005,0.01,0.0005,0.0005,0.5,0.05"
+# Testing scenarios: the split columns give the share of infected HCWs that are diagnosed (ODE c_test)
+hiTest: "--testingProbabilities 0.00005,0.01,0.0005,0.0005,0.5,0.05"
+hcwDailyTest: "--testingProbabilities 0.00005,0.01,0.0005,0.0005,0.95,0.05 --testingRepeatDelay 1"
+# The remaining scenarios of scenarios.yaml, for a complete set in one batch
+hcwPPE: "--closures inputConfigFiles/closureJun6_real_later3_delta_omicronBA2_earlier8_hospitalPPE.json"
+noVaccHCW: "--immunizationOrder 0,2,3,4,5,6,0,0,7,8"
+noVacc: "--immunizationsPerWeek 0"
+longQuarantine: "--quarantineLength 21"
+noVaccHCW_hiTest: "--immunizationOrder 0,2,3,4,5,6,0,0,7,8 --testingProbabilities 0.00005,0.01,0.0005,0.0005,0.5,0.05"
+quarantine0_hiTest: "--quarantinePolicy 0 --testingProbabilities 0.00005,0.01,0.0005,0.0005,0.5,0.05"
+quarantine0_noVaccHCW: "--quarantinePolicy 0 --immunizationOrder 0,2,3,4,5,6,0,0,7,8"

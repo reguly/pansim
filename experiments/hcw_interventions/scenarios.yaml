@@ -90,6 +90,15 @@ hcwNoQuarantine: "--hcwQuarantineExemptFrom 0"
 # 3rd-wave peak could produce the sharp drop in the SZTE absence curve on 2021-03-25..28.
 hcwNoQuarantineMar21: "--hcwQuarantineExemptFrom 183"
 
+# closuresNone above uses noRules.json, which removes EVERY rule: not only the closures but also
+# the variant seeding (ExposeToMutation: no alpha/delta waves) and the day-259 hospital TestingProb
+# rule - three changes at once. The "_noClosures" closures file keeps those (and HolidayMode, plus
+# Masks/QuarantinePolicy which only act from day 530) and drops only the restrictions: location
+# closures, SchoolAgeRestriction, Curfew, ReduceMovement. Needed for the ODE comparison, where
+# the variants enter through v(t).
+closuresOnlyNone: "--closures inputConfigFiles/closureJun6_real_later3_delta_omicronBA2_earlier8_noClosures.json"
+closuresOnlyNone_hiTest: "--closures inputConfigFiles/closureJun6_real_later3_delta_omicronBA2_earlier8_noClosures.json --testingProbabilities 0.00005,0.01,0.0005,0.0005,0.5,0.05"
+
 # --- later rounds (commented out) ---
 # Daily screening with rapid antigen tests instead of PCR (faster/cheaper/more frequent in
 # reality, typically less sensitive - may give different results than hcwDailyTest's PCR default).

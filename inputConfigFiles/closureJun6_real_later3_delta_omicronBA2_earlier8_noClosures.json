@@ -1,0 +1,124 @@
+{
+  "rules": [
+    {
+      "name": "ExposeToMutation",
+      "conditionType": "afterDays",
+      "threshold": 132,
+      "threshold2": 1,
+      "openAfter": 6,
+      "parameter": 0.00024,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "ExposeToMutation",
+      "conditionType": "afterDays",
+      "threshold": 316,
+      "threshold2": 2,
+      "openAfter": 6,
+      "parameter": 0.00035,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "ExposeToMutation",
+      "conditionType": "afterDays",
+      "threshold": 437,
+      "threshold2": 3,
+      "openAfter": 6,
+      "parameter": 0.00025,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "ExposeToMutation",
+      "conditionType": "afterDays",
+      "threshold": 480,
+      "threshold2": 4,
+      "openAfter": 6,
+      "parameter": 0.0002,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "ExposeToMutation",
+      "conditionType": "afterDays",
+      "threshold": 1530,
+      "threshold2": 4,
+      "openAfter": 140,
+      "parameter": 1e-05,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "ExposeToMutation",
+      "conditionType": "afterDays",
+      "threshold": 604,
+      "threshold2": 5,
+      "openAfter": 150,
+      "parameter": 0.0001,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "ExposeToMutation",
+      "conditionType": "afterDays",
+      "threshold": 1085,
+      "threshold2": 6,
+      "openAfter": 150,
+      "parameter": 1e-05,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "HolidayMode",
+      "conditionType": "afterDays",
+      "threshold": 92,
+      "threshold2": 92,
+      "openAfter": 4,
+      "parameter": 1.0,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "HolidayMode",
+      "conditionType": "afterDays",
+      "threshold": 457,
+      "threshold2": 457,
+      "openAfter": 1,
+      "parameter": 1.0,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "Masks",
+      "parameter": 1.25,
+      "conditionType": "afterDays",
+      "threshold": 530,
+      "threshold2": 530,
+      "openAfter": 1700,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "QuarantinePolicy",
+      "conditionType": "afterDays",
+      "threshold": 530,
+      "threshold2": 530,
+      "openAfter": 1,
+      "parameter": 1,
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    },
+    {
+      "name": "TestingProb",
+      "conditionType": "afterDays",
+      "threshold": 259,
+      "threshold2": 259,
+      "openAfter": 1,
+      "parameter": "0.00005,0.01,0.0005,0.0005,0.5,0.05",
+      "closeAfter": -1,
+      "locationTypesToClose": []
+    }
+  ]
+}
