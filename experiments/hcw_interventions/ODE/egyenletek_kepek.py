@@ -21,13 +21,13 @@ BLOKKOK = {
     "fertozesi_erok": [
         (r"b(t)", r"\beta\,v(t)\,c(t)"),
         (r"\lambda_c", r"b\,\dfrac{I}{N}"),
-        (r"\lambda_{comm}", r"\sigma_c\,b\,\dfrac{I}{N}"),
-        (r"\lambda_{pat}", r"\sigma_w\,\beta_p\,v\,q_H\,\dfrac{H}{H+P_0}"),
-        (r"\lambda_{staff}", r"\sigma_w\,\beta_s\,v\,q_{I_h}\,(1-c_{test})\,\dfrac{I_h}{N_w}"),
-        (r"\lambda_h", r"(1-\theta)\,\lambda_{comm} + \theta\,\left(\lambda_{pat} + \lambda_{staff}\right)"),
+        (r"\lambda_{comm}", r"\rho_c\,b\,\dfrac{I}{N}"),
+        (r"\lambda_{pat}", r"\beta_{PH}\,v\,\dfrac{H}{H+P_0}"),
+        (r"\lambda_{staff}", r"\beta_{HH}\,v\,(1-c_{test})\,\dfrac{I_h}{N_w}"),
+        (r"\lambda_h", r"\lambda_{comm} + \lambda_{pat} + \lambda_{staff}"),
     ],
     "oltas": [
-        (r"V_g", r"e_v\,u_g(t)\,\dfrac{S_g}{\max(S_g+R_g,\ 1)},\qquad g \in \{c, h\}"),
+        (r"V_g(t)", r"e_v\,u_g(t-\tau_v)\,\dfrac{S_g}{\max(S_g+R_g,\ 1)},\qquad g \in \{c, h\}"),
     ],
     "civilek": [
         (r"\dot S_c", r"-\lambda_c S_c + \omega R_c - V_c"),
@@ -45,9 +45,9 @@ BLOKKOK = {
     ],
     "szamlalok": [
         (r"\dot C_{civ}", r"\lambda_c S_c"),
-        (r"\dot C_{comm}", r"(1-\theta)\,\lambda_{comm} S_h"),
-        (r"\dot C_{pat}", r"\theta\,\lambda_{pat} S_h"),
-        (r"\dot C_{staff}", r"\theta\,\lambda_{staff} S_h"),
+        (r"\dot C_{comm}", r"\lambda_{comm} S_h"),
+        (r"\dot C_{pat}", r"\lambda_{pat} S_h"),
+        (r"\dot C_{staff}", r"\lambda_{staff} S_h"),
         (r"\dot C_{reinf}", r"\omega\,(R_c + R_h)"),
     ],
     "variansszorzo": [

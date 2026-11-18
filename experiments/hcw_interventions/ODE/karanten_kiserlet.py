@@ -56,7 +56,7 @@ def main():
     has_szte = "szte" in real
     if has_szte:
         base0 = {**pB, "kappa_comm": 0.0, "kappa_work": 0.0}
-        free0 = [("sigma_c", pB["sigma_c"], 0.2, 6.0), ("beta_p", pB["beta_p"], 1e-3, 5.0),
+        free0 = [("rho_c", pB["rho_c"], 0.1, 3.0), ("beta_PH", pB["beta_PH"], 1e-4, 0.5),
                  ("c_test", pB["c_test"], 0.3, 1.0), ("I_h0_pct", pB["I_h0_pct"], 0.0, 15.0)]
         pB_re = K.fit([("SZTE", real["szte"].values, 1.0, "kieso_pct")], base0, free0, x0_B, inp_B,
                       fit_c=False, label="B újraillesztve, kappa = 0")
@@ -81,7 +81,7 @@ def main():
     if has_szte:
         tab["B újraillesztve, kappa = 0"] = sor(oB_re)
         tab["B újraillesztve, kappa = 0"].update(
-            {k: round(float(pB_re[k]), 3) for k in ("sigma_c", "beta_p", "c_test", "I_h0_pct")})
+            {k: round(float(pB_re[k]), 3) for k in ("rho_c", "beta_PH", "c_test", "I_h0_pct")})
     df = pd.DataFrame(tab).T
     print(df.to_string())
     df.to_csv(K.OUT / "karanten_kiserlet.csv")

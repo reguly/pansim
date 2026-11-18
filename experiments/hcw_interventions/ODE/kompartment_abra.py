@@ -87,7 +87,7 @@ def csoport(ax, g):
     xs = CSUCS[S][0]
     yr = CSUCS[R][1]
     nyil(ax, oldal(S, v, 0.3), (xs + 0.3, yr + 0.18*sz), oldal(R, "l", 0.18*sz))
-    felirat(ax, 2.6, yr + 0.45*sz, rf"oltás  $V_{g}$")
+    felirat(ax, 2.6, yr + 0.45*sz, rf"oltás  $V_{g}$, $\tau_v$ késéssel")
     nyil(ax, oldal(R, "l", -0.18*sz), (xs - 0.3, yr - 0.18*sz), oldal(S, v, -0.3))
     felirat(ax, 2.6, yr - 0.45*sz, r"immunitásvesztés  $\omega$")
 
@@ -122,7 +122,7 @@ def main():
     doboz(ax, cx, cy, "kollégák\n" r"$(1-c_{test})\,I_h\,/\,N_w$", SZIN["seged"], w=2.4, h=1.0, fs=9.5,
           vastag=1.0)
     doboz(ax, lx, ly, "$\\lambda_h$  HCW-fertőzési erő\n"
-          r"$(1-\theta)\,\lambda_{comm} + \theta\,(\lambda_{pat} + \lambda_{staff})$",
+          r"$\lambda_{comm} + \lambda_{pat} + \lambda_{staff}$",
           SZIN["seged"], w=3.1, h=1.0, fs=8.5, vastag=1.0)
 
     # források
@@ -135,11 +135,11 @@ def main():
     nyil(ax, (kx - 0.4, ky + 0.5), (kx - 0.4, 8.0), hatas=True)
     felirat(ax, kx - 0.45, 6.45, r"$\lambda_c = \beta\,c(t)\,v(t)\,I/N$", hatas=True, ha="right")
     nyil(ax, (kx - 0.4, ky - 0.5), (kx - 0.4, ly + 0.5), hatas=True)
-    felirat(ax, kx - 0.45, 3.75, r"$\lambda_{comm} = \sigma_c\,\beta\,c\,v\,I/N$", hatas=True, ha="right")
+    felirat(ax, kx - 0.45, 3.75, r"$\lambda_{comm} = \rho_c\,\beta\,c\,v\,I/N$", hatas=True, ha="right")
     nyil(ax, (bx - 1.45, by - 0.2), (lx + 1.55, ly + 0.35), hatas=True)
-    felirat(ax, 4.3, 3.65, r"$\lambda_{pat} \propto \sigma_w\,\beta_p\,q_H\,v$", hatas=True)
+    felirat(ax, 4.3, 3.65, r"$\lambda_{pat} \propto \beta_{PH}\,v$", hatas=True)
     nyil(ax, (cx - 1.2, cy + 0.1), (lx + 1.55, cy + 0.1), hatas=True)
-    felirat(ax, 3.8, 1.72, r"$\lambda_{staff} \propto \sigma_w\beta_s q_{I_h} v$", hatas=True, fs=8.5)
+    felirat(ax, 3.8, 1.72, r"$\lambda_{staff} \propto \beta_{HH}\,v$", hatas=True, fs=8.5)
     nyil(ax, (lx, ly - 0.5), (lx, 0.03), hatas=True)
 
     # ---- karantén és dolgozói arány a jobb oldalon ----

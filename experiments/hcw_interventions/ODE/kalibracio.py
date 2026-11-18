@@ -8,8 +8,10 @@ Az egyenletek a SIHDR_HCW_v3.py egyenletei (5-6. pont). Négy bővítést kapott
      Csak a közösségi fertőzési erőkre hat; a kórházi tagokra nem (a kórházakat nem zárták be).
   2) v(t): variánsszorzó (alfa 1,85/0,98, delta 2,05/0,98, a panSim infectiousnessMultiplier-e),
      a panSim MUT oszlopában lévő variánsarányokkal súlyozva. Minden fertőzési erőre hat.
-  3) Oltás: a napi oltásszám e_v hatékonysággal S -> R áramot ad, 14 nap késleltetéssel.
-     A HCW-k kapják az első 0,9*N_h adagot (panSim: --immunizationOrder, 90%-os szint).
+  3) Oltás: a napi oltásszám e_v hatékonysággal S -> R áramot ad, tau_v = 14 nap késleltetéssel:
+     a t napon a t - tau_v napon beadott adagok válnak hatásossá (panSim: az első adag után 1 hétig
+     nincs védelem, 1-4 hét között fél védelem). A HCW-k kapják az első 0,9*N_h adagot
+     (panSim: --immunizationOrder, 90%-os szint).
   4) Karanténban lévő, nem fertőzött HCW-k (Q_h), algebrai megfigyelt mennyiség:
        Q_h = [kappa_comm*N_h*I/N        (háztartási/közösségi kontaktus miatti karantén)
               + kappa_work*c_test*I_h]  (munkahelyi kontaktus miatti karantén)
@@ -18,6 +20,12 @@ Az egyenletek a SIHDR_HCW_v3.py egyenletei (5-6. pont). Négy bővítést kapott
      rendelőt soha nem zárja munkahelyi karantén, ezért az (A) kalibrációban kappa_work = 0.
      A beoltottakat a panSim nem teszi kontaktkarantén alá (movementPolicies.h, quarantineAgent:
      quarantineImmuneActive = false), ezért a szorzó (1 - beoltottak aránya), az első adagtól.
+
+A v3 HCW-fertőzési szorzói (theta, sigma_c, sigma_w, beta_p, beta_s, q_H, q_I_h) csak szorzatként
+hatnak, ezért három, külön értelmezhető paraméterbe vannak összevonva (osszevont()):
+  rho_c   = (1-theta)*sigma_c          a HCW-k közösségi fertőződése a civilekéhez képest
+  beta_PH = theta*sigma_w*beta_p*q_H   napi fertőződési ráta betegtől, ha minden ágyban COVID-beteg van
+  beta_HH = theta*sigma_w*beta_s*q_I_h napi fertőződési ráta kollégától, ha minden kolléga fertőző
 
 Megfigyelt mennyiségek:
   panSim HCI  = a fertőzött VAGY karanténban lévő HCW-k %-a  ~  (I_h + H_h + Q_h)/N_h,
@@ -65,6 +73,17 @@ V3 = dict(beta=1/3, omega=1/180, tau_I=1/8, p_D=0.3, tau_H_c=1/10, tau_H_h=1/10,
           p_H_h=0.1, theta=0.5, sigma_c=0.7, sigma_w=0.3, beta_p=1/3, beta_s=1/3, q_H=0.7,
           q_I_h=0.1, c_test=0.7, P_0=5e4, kappa_comm=0.0, kappa_work=0.0, e_v=0.0)
 
+
+
+def osszevont(p):
+    """A v3 szorzóiból az összevont rho_c, beta_PH, beta_HH paraméterek (a régiek nélkül)."""
+    regi = ("theta", "sigma_c", "sigma_w", "beta_p", "beta_s", "q_H", "q_I_h")
+    q = {k: v for k, v in p.items() if k not in regi}
+    q.update(rho_c=(1 - p["theta"])*p["sigma_c"], beta_PH=p["theta"]*p["sigma_w"]*p["beta_p"]*p["q_H"],
+             beta_HH=p["theta"]*p["sigma_w"]*p["beta_s"]*p["q_I_h"])
+    return q
+
+
 KNOT_STEP = 21                                   # c(t) csomópontjai 3 hetente
 KNOTS = np.arange(0, T + KNOT_STEP, KNOT_STEP, dtype=float)
 
@@ -74,8 +93,8 @@ def rhs(t, x, p, inp):
     S_c, I_c, H_c, D_c, R_c, S_h, I_h, H_h, D_h, R_h = x[:10]
     c = np.interp(t, KNOTS, p["c_knots"]) if "c_knots" in p else 1.0
     v = np.interp(t, inp["day"], inp["v"]) if inp else 1.0
-    u_c = np.interp(t, inp["day"], inp["u_c"]) if inp else 0.0
-    u_h = np.interp(t, inp["day"], inp["u_h"]) if inp else 0.0
+    u_c = np.interp(t - p["tau_v"], inp["day"], inp["u_c"], left=0.0) if inp else 0.0  # tau_v napja beadott adagok
+    u_h = np.interp(t - p["tau_v"], inp["day"], inp["u_h"], left=0.0) if inp else 0.0
     nem_mentes = 1 - np.interp(t, inp["day"], inp["vax_h_frac"]) if inp else 1.0
 
     I = I_c + I_h
@@ -92,10 +111,10 @@ def rhs(t, x, p, inp):
 
     b = p["beta"]*v*c
     lambda_c = b*I/N
-    lambda_comm = p["sigma_c"]*b*I/N
-    lambda_pat = p["sigma_w"]*p["beta_p"]*v*p["q_H"]*H/(H + p["P_0"])
-    lambda_staff = p["sigma_w"]*p["beta_s"]*v*p["q_I_h"]*(1-p["c_test"])*I_h/N_w
-    parts = np.array([(1-p["theta"])*lambda_comm, p["theta"]*lambda_pat, p["theta"]*lambda_staff])
+    lambda_comm = p["rho_c"]*b*I/N
+    lambda_pat = p["beta_PH"]*v*H/(H + p["P_0"])
+    lambda_staff = p["beta_HH"]*v*(1-p["c_test"])*I_h/N_w
+    parts = np.array([lambda_comm, lambda_pat, lambda_staff])
     lambda_h = parts.sum()
 
     # oltás: a nem fertőzött (S+R) csoport kapja az adagokat, az S-beliek e_v része lesz immunis
@@ -176,7 +195,7 @@ def observe(tt, y, p, inp=None):
 
 # %% 2. Ellenőrzés: bővítések nélkül a v3 eredményeit kell adnia
 def ellenorzes_v3():
-    p = dict(V3)
+    p = osszevont(V3)
     x0 = np.array([180000 - 10100 - 10, 10, 0, 0, 0, 10100, 0, 0, 0, 0], dtype=float)
     global N_c, N_h, N_ALL
     saved = N_c, N_h, N_ALL
@@ -202,8 +221,9 @@ def load_sim():
 
 
 def make_inputs(day, alpha, delta, doses, hcw_doses_until=None):
-    """Variánsszorzó és csoportonkénti napi oltásszám. A HCW-k kapják az első 0,9*N_h adagot,
-    vagy (valós eset) hcw_doses_until napig egyenletesen."""
+    """Variánsszorzó és csoportonkénti napi oltásszám (a beadás napján; a hatás késleltetése, tau_v,
+    az rhs-ben van). A HCW-k kapják az első 0,9*N_h adagot, vagy (valós eset) hcw_doses_until napig
+    egyenletesen."""
     v = 1 + (1.85/0.98 - 1)*alpha + (2.05/0.98 - 1)*delta
     doses = np.asarray(doses, dtype=float)
     if hcw_doses_until is None:
@@ -213,9 +233,7 @@ def make_inputs(day, alpha, delta, doses, hcw_doses_until=None):
         a, b = hcw_doses_until
         u_h = np.where((day >= a) & (day < b), 0.9*N_h/(b - a), 0.0)
     u_c = np.clip(doses - u_h, 0, None)
-    lag = 14                                       # védettség kialakulása
-    shift = lambda s: np.concatenate([np.zeros(lag), s[:-lag]])  # noqa: E731
-    return dict(day=np.asarray(day, dtype=float), v=np.asarray(v), u_c=shift(u_c), u_h=shift(u_h),
+    return dict(day=np.asarray(day, dtype=float), v=np.asarray(v), u_c=u_c, u_h=u_h,
                 vax_h_frac=np.minimum(np.cumsum(u_h)/N_h, 1.0))
 
 
@@ -363,8 +381,9 @@ def main():
     inp_A = make_inputs(day, m["alpha"].values, m["delta"].values, m["VAC"].values)
 
     # Közös, a panSim-ből vett (nem illesztett) értékek
-    base = dict(V3)
+    base = osszevont(V3)
     base.update(
+        tau_v=14.0,         # panSim: az 1. adag után 1 hétig nincs, 1-4 hétig fél védelem -> kb. 2 hét
         omega=1/1000,       # panSim: fertőzés utáni védettség 85 %, heti 0,3 % csökkenés -> lassú
         P_0=float(m["H"].iloc[14:].mean()),   # nem-COVID kórházi betegek (panSim H oszlop)
         e_v=0.77,           # panSim protectionInfection, 2 adag, hasonló törzs
@@ -386,7 +405,7 @@ def main():
           ("HCI", m["HCI"].values, 1.0, hci_obs),
           ("deaths", (m["D1"] - m["D1"].iloc[0]).values, 0.5, lambda o: o["deaths"].values - o["deaths"].iloc[0])]
     freeA = [("p_H_c", 0.05, 0.005, 0.3), ("p_D", 0.3, 0.05, 0.6),
-             ("sigma_c", 2.0, 0.2, 4.0), ("beta_p", 1/3, 1e-3, 5.0), ("kappa_comm", 0.5, 0.0, 5.0)]
+             ("rho_c", 1.0, 0.1, 2.0), ("beta_PH", 0.035, 1e-4, 0.5), ("kappa_comm", 0.5, 0.0, 5.0)]
     pA = fit(tA, base, freeA, x0_A, inp_A, label="A: panSim")
     oA = simulate(pA, inp_A, x0_A(pA))
 
@@ -410,11 +429,11 @@ def main():
     has_szte = "szte" in real
     if has_szte:
         tB2 = [("SZTE", real["szte"].values, 1.0, "kieso_pct")]
-        freeB2 = [("sigma_c", pA["sigma_c"], 0.2, 4.0), ("beta_p", max(pA["beta_p"], 2e-3), 1e-3, 5.0),
+        freeB2 = [("rho_c", pA["rho_c"], 0.1, 2.0), ("beta_PH", max(pA["beta_PH"], 2e-4), 1e-4, 0.5),
                   ("kappa_comm", max(pA["kappa_comm"], 0.05), 0.0, 10.0), ("kappa_work", 1.0, 0.0, 20.0),
                   ("c_test", 0.5, 0.3, 0.9), ("I_h0_pct", 3.0, 0.0, 15.0)]
         pB = fit(tB2, pB, freeB2, x0_B, inp_B, fit_c=False,
-                 priors={"sigma_c": (pA["sigma_c"], 1.0), "beta_p": (max(pA["beta_p"], 0.05), 1.0)},
+                 priors={"rho_c": (pA["rho_c"], 1.0), "beta_PH": (max(pA["beta_PH"], 0.005), 1.0)},
                  label="B2: SZTE kieső dolgozók")
     oB = simulate(pB, inp_B, x0_B(pB))
 
