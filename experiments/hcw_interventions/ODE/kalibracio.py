@@ -88,6 +88,16 @@ KNOT_STEP = 21                                   # c(t) csomópontjai 3 hetente
 KNOTS = np.arange(0, T + KNOT_STEP, KNOT_STEP, dtype=float)
 
 
+def c_test_at(t, p):
+    """A kiszűrt (és otthon maradó) fertőzött HCW-k aránya a t időpontban. Alapból állandó
+    (p["c_test"]); a p["c_test_ido"] = (nap, előtte, utána) megadásával egy napon átvált (a panSim
+    tesztelési forgatókönyvei a 259. napon, a lezárási fájl tesztelési szabályánál térnek el)."""
+    if "c_test_ido" not in p:
+        return p["c_test"]
+    nap, elotte, utana = p["c_test_ido"]
+    return np.where(np.asarray(t) < nap, elotte, utana)
+
+
 # %% 1. A modell jobb oldala (a v3 5-6. pontja + bővítések)
 def rhs(t, x, p, inp):
     S_c, I_c, H_c, D_c, R_c, S_h, I_h, H_h, D_h, R_h = x[:10]
@@ -100,12 +110,13 @@ def rhs(t, x, p, inp):
     I = I_c + I_h
     H = H_c + H_h
     N = N_c + N_h
-    Q_h = (p["kappa_comm"]*N_h*I/N + p["kappa_work"]*p["c_test"]*I_h)*nem_mentes
+    ct = c_test_at(t, p)
+    Q_h = (p["kappa_comm"]*N_h*I/N + p["kappa_work"]*ct*I_h)*nem_mentes
     if t < p.get("vax_exempt_from_day", 0):          # eddig a beoltottak is karanténba kerülnek
         nem_mentes = 1.0
-        Q_h = p["kappa_comm"]*N_h*I/N + p["kappa_work"]*p["c_test"]*I_h
+        Q_h = p["kappa_comm"]*N_h*I/N + p["kappa_work"]*ct*I_h
     Q_h *= t < p.get("kappa_off_day", np.inf)        # ettől a naptól nincs HCW-kontaktkarantén
-    Kieso_dolgozok_szama = p["c_test"]*I_h + H_h + D_h + Q_h
+    Kieso_dolgozok_szama = ct*I_h + H_h + D_h + Q_h
     N_w = N_h - Kieso_dolgozok_szama
     DA = N_w / N_h                                   # Dolgozok_aranya
 
@@ -113,7 +124,7 @@ def rhs(t, x, p, inp):
     lambda_c = b*I/N
     lambda_comm = p["rho_c"]*b*I/N
     lambda_pat = p["beta_PH"]*v*H/(H + p["P_0"])
-    lambda_staff = p["beta_HH"]*v*(1-p["c_test"])*I_h/N_w
+    lambda_staff = p["beta_HH"]*v*(1-ct)*I_h/N_w
     parts = np.array([lambda_comm, lambda_pat, lambda_staff])
     lambda_h = parts.sum()
 
@@ -172,9 +183,9 @@ def observe(tt, y, p, inp=None):
     S_c, I_c, H_c, D_c, R_c, S_h, I_h, H_h, D_h, R_h = y[:, :10].T
     I = I_c + I_h
     nem_mentes = 1 - np.interp(tt, inp["day"], inp["vax_h_frac"]) if inp else 1.0
-    Q_h = (p["kappa_comm"]*N_h*I/N_ALL + p["kappa_work"]*p["c_test"]*I_h)*nem_mentes
+    ct = c_test_at(tt, p)
     nem_mentes = np.where(tt < p.get("vax_exempt_from_day", 0), 1.0, nem_mentes)
-    Q_h = (p["kappa_comm"]*N_h*I/N_ALL + p["kappa_work"]*p["c_test"]*I_h)*nem_mentes
+    Q_h = (p["kappa_comm"]*N_h*I/N_ALL + p["kappa_work"]*ct*I_h)*nem_mentes
     Q_h = Q_h*(tt < p.get("kappa_off_day", np.inf))
     o = pd.DataFrame(index=pd.Index(tt, name="day"))
     o["civil_prev_pct"] = 100*I_c/N_c
@@ -184,8 +195,8 @@ def observe(tt, y, p, inp=None):
     o["deaths"] = D_c + D_h
     o["Q_h"] = Q_h
     o["hci_pct"] = 100*(I_h + H_h + Q_h)/N_h                     # panSim HCI megfelelője
-    o["kieso_pct"] = 100*(p["c_test"]*I_h + H_h + Q_h)/N_h       # SZTE kieső megfelelője
-    o["dolgozo_arany"] = 1 - (p["c_test"]*I_h + H_h + D_h + Q_h)/N_h
+    o["kieso_pct"] = 100*(ct*I_h + H_h + Q_h)/N_h       # SZTE kieső megfelelője
+    o["dolgozo_arany"] = 1 - (ct*I_h + H_h + D_h + Q_h)/N_h
     o["cum_civ"], o["cum_comm"], o["cum_pat"], o["cum_staff"], o["cum_reinf"] = y[:, 10:].T
     o["cum_hcw"] = o[["cum_comm", "cum_pat", "cum_staff"]].sum(axis=1)
     o["new_civ"] = o["cum_civ"].diff()
