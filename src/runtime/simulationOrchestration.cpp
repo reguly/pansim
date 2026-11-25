@@ -536,6 +536,7 @@ Simulation<PositionType,
         auto locationMapping = tmp.second;
         locs->initializeArgs(result);
         MovementPolicy<Simulation>::init(data.acquireLocationTypes(), cemeteryID);
+        MovementPolicy<Simulation>::initCovidHospitals(locationMapping, thrust::host_vector<TypeOfLocation>(locs->locType));
         this->hospitalType = data.acquireLocationTypes().hospital;
         TestingPolicy<Simulation>::init(data.acquireLocationTypes());
         auto agentTypeMapping = agents->initAgentTypes(data.acquireAgentTypes());

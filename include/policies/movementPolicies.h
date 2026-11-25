@@ -5,6 +5,9 @@
 #include "cxxopts.hpp"
 #include "operators.h"
 #include "locationTypesFormat.h"
+#include "customExceptions.h"
+#include "smallTools.h"
+#include <map>
 
 template<typename SimulationType>
 class NoMovement {
@@ -1395,6 +1398,9 @@ public:
     bool lockdownNonvaccActive = false;
     unsigned quarantinePolicy;
     unsigned hcwQuarantineExemptFrom;
+    std::string covidHospitalsArg;// --covidHospitals: location IDs of the designated COVID hospital(s)
+    bool covidHospitalsMild = false;// --covidHospitalsMild: also the hospital visits of mild (M) COVID cases
+    thrust::device_vector<unsigned> covidHospitalIdx;// the same as location indices
     // add program parameters if we need any, this function got called already
     // from Simulation
     static void addProgramParameters(cxxopts::Options& options) {
@@ -1409,6 +1415,13 @@ public:
             ("hcwQuarantineExemptFrom",
             "Day from which undiagnosed healthcare workers are exempt from contact quarantine (default: never)",
             cxxopts::value<unsigned>()->default_value(std::to_string(std::numeric_limits<unsigned>::max())))
+            ("covidHospitals",
+            "Comma-separated location IDs of designated COVID hospitals: severe COVID cases (WBState S) are cared "
+            "for there instead of their own hospital, spread evenly if several (default: none)",
+            cxxopts::value<std::string>()->default_value(""))
+            ("covidHospitalsMild",
+            "With --covidHospitals: also redirect the hospital visits of mild COVID cases (WBState M), 0/1",
+            cxxopts::value<unsigned>()->default_value("0"))
             ("dumpLocationAgentList",
             "Dump per-location list of agents at each iteration (directory)",
             cxxopts::value<std::string>()->default_value(""))
@@ -1422,6 +1435,8 @@ public:
         quarantinePolicy = result["quarantinePolicy"].as<unsigned>();
         quarantineLength = result["quarantineLength"].as<unsigned>();
         hcwQuarantineExemptFrom = result["hcwQuarantineExemptFrom"].as<unsigned>();
+        covidHospitalsArg = result["covidHospitals"].as<std::string>();
+        covidHospitalsMild = result["covidHospitalsMild"].as<unsigned>() > 0;
         dumpLocationAgentList = result["dumpLocationAgentList"].as<std::string>();
         dumpLoctypeStat = result["dumpLoctypeStat"].as<std::string>();
         if (dumpLocationAgentList.length()>0) Util::needAgentsSortedByLocation = 1;
@@ -1435,6 +1450,23 @@ public:
         school = data.school;
         work = data.work;
         classroom = data.classroom;
+    }
+
+    // Resolve the --covidHospitals location IDs to location indices, once the locations are loaded
+    template<typename LocTypeVector>
+    void initCovidHospitals(const std::map<std::string, unsigned>& locationMapping, const LocTypeVector& locTypes) {
+        if (covidHospitalsArg.empty()) return;
+        thrust::host_vector<unsigned> idx;
+        for (const auto& id : splitStringString(covidHospitalsArg, ',')) {
+            auto it = locationMapping.find(id);
+            if (it == locationMapping.end()) throw CustomErrors("covidHospitals: unknown location ID " + id);
+            if (unsigned(locTypes[it->second]) != hospital)
+                throw CustomErrors("covidHospitals: location " + id + " is not a hospital");
+            idx.push_back(it->second);
+        }
+        covidHospitalIdx = idx;
+        std::cerr << "covidHospitals: " << idx.size() << " designated COVID hospital(s)"
+                  << (covidHospitalsMild ? ", mild cases included" : "") << '\n';
     }
 
     void dumpLoctypeStatNow(unsigned timestamp) {
@@ -1768,6 +1800,29 @@ public:
         RealMovementOps::doMovementDriver<<<(numberOfAgents - 1) / 256 + 1, 256>>>(numberOfAgents, a);
         cudaDeviceSynchronize();
 #endif
+        // Designated COVID hospital(s): severe (and with --covidHospitalsMild also mild) COVID cases who
+        // are at a hospital now are moved to one of them. Non-COVID hospital stays are not affected.
+        if (!covidHospitalIdx.empty()) {
+            unsigned* covidHospitalPtr = thrust::raw_pointer_cast(covidHospitalIdx.data());
+            unsigned numCovidHospitals = covidHospitalIdx.size();
+            bool includeMild = covidHospitalsMild;
+            unsigned hospitalTypeL = hospital;
+            auto* locTypePtr = a.locationTypePtr;
+            auto* statesPtr = a.agentStatesPtr;
+            auto* locPtr = a.agentLocationsPtr;
+            thrust::for_each(thrust::make_counting_iterator(0u),
+                thrust::make_counting_iterator(numberOfAgents),
+                [=] HD(unsigned i) {
+                    unsigned loc = locPtr[i];
+                    if (unsigned(locTypePtr[loc]) != hospitalTypeL || !statesPtr[i].isInfected()) return;
+                    states::WBStates wb = statesPtr[i].getWBState();
+                    if (!(wb == states::WBStates::S || (includeMild && wb == states::WBStates::M))) return;
+                    for (unsigned k = 0; k < numCovidHospitals; k++) {
+                        if (covidHospitalPtr[k] == loc) return;
+                    }
+                    locPtr[i] = covidHospitalPtr[i % numCovidHospitals];
+                });
+        }
         Util::updatePerLocationAgentLists(agentLocations, locationIdsOfAgents, locationAgentList, locationListOffsets);
 
         if (dumpLocationAgentList.length()>0) {
