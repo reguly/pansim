@@ -388,6 +388,64 @@ void Simulation<PositionType,
     healthcareWorkerCount = thrust::count(healthcareWorker.begin(), healthcareWorker.end(), true);
 }
 
+// --hcwFocus: the healthcare workers (same definition as flagHealthcareWorkers) whose workplace is one of
+// the given locations, or any hospital-type location for "hospital"
+template<typename PositionType,
+    typename TypeOfLocation,
+    typename PPState,
+    typename AgentMeta,
+    template<typename>
+    typename MovementPolicy,
+    template<typename>
+    typename InfectionPolicy,
+    template<typename>
+    typename TestingPolicy,
+    template<typename>
+    typename ClosurePolicy>
+void Simulation<PositionType,
+    TypeOfLocation,
+    PPState,
+    AgentMeta,
+    MovementPolicy,
+    InfectionPolicy,
+    TestingPolicy,
+    ClosurePolicy>::flagFocusWorkers(const std::map<std::string, unsigned>& locationMapping) {
+    if (hcwFocusArg.empty()) return;
+    thrust::host_vector<TypeOfLocation> locTypes_h = locs->locType;
+    thrust::host_vector<bool> focusLoc_h(locTypes_h.size(), false);
+    if (hcwFocusArg == "hospital") {
+        for (unsigned l = 0; l < locTypes_h.size(); l++) focusLoc_h[l] = unsigned(locTypes_h[l]) == hospitalType;
+    } else {
+        for (const auto& id : splitStringString(hcwFocusArg, ',')) {
+            auto it = locationMapping.find(id);
+            if (it == locationMapping.end()) throw CustomErrors("hcwFocus: unknown location ID " + id);
+            focusLoc_h[it->second] = true;
+        }
+    }
+    thrust::device_vector<bool> focusLoc = focusLoc_h;
+    auto* focusLocPtr = thrust::raw_pointer_cast(focusLoc.data());
+    auto* locationOffsetPtr = thrust::raw_pointer_cast(agents->locationOffset.data());
+    auto* possibleTypesPtr = thrust::raw_pointer_cast(agents->possibleTypes.data());
+    auto* locationTypePtr = thrust::raw_pointer_cast(locs->locType.data());
+    auto* possibleLocationsPtr = thrust::raw_pointer_cast(agents->possibleLocations.data());
+    focusWorker.resize(agents->PPValues.size());
+    thrust::transform(thrust::make_counting_iterator(unsigned(0)),
+        thrust::make_counting_iterator(unsigned(focusWorker.size())),
+        focusWorker.begin(),
+        [=] HD(unsigned id) -> bool {
+            for (unsigned idx = locationOffsetPtr[id]; idx < locationOffsetPtr[id + 1]; idx++) {
+                unsigned loc = possibleLocationsPtr[idx];
+                if (possibleTypesPtr[idx] == 4 && (locationTypePtr[loc] == 12 || locationTypePtr[loc] == 14)
+                    && focusLocPtr[loc]) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    focusWorkerCount = thrust::count(focusWorker.begin(), focusWorker.end(), true);
+    std::cerr << "hcwFocus: " << focusWorkerCount << " healthcare workers\n";
+}
+
 template<typename PositionType,
     typename TypeOfLocation,
     typename PPState,
@@ -451,6 +509,7 @@ Simulation<PositionType,
     diseaseProgressionScaling = splitStringFloat(result["diseaseProgressionScaling"].as<std::string>(), ',');
     diseaseProgressionDeathScaling = splitStringFloat(result["diseaseProgressionDeathScaling"].as<std::string>(), ',');
     diagnosticLevel = result["diags"].as<unsigned>();
+    hcwFocusArg = result["hcwFocus"].as<std::string>();
     setupHospitalizations(result);
 #if THRUST_DEVICE_SYSTEM == THRUST_DEVICE_SYSTEM_OMP
     if (omp_get_max_threads() == 1) {
@@ -489,6 +548,7 @@ Simulation<PositionType,
             data.acquireLocationTypes());
         RandomGenerator::resize(agents->PPValues.size());
         statesHeader = header + "H\tT\tP1\tP2\tQ\tQT\tNQ\tMUT\tHOM\tVAC\tNI\tINF\tREINF\tBSTR\tIMM\tHCI\tHCE\tINFV\tINFH\tVNI\tHCWH\tHCWD\tHCWQI\tHCWQN\tHCWU";
+        if (!hcwFocusArg.empty()) statesHeader += "\tFHCW\tFHCE\tFHCWH\tFHCWD\tFHCWQI\tFHCWQN\tFHCWU";
         std::cout << statesHeader << '\n';
         auto locTypes = data.acquireLocationTypes();
         homeType = locTypes.home;
@@ -496,6 +556,7 @@ Simulation<PositionType,
         locs->initialize();
         immunization->initCategories();
         flagHealthcareWorkers();
+        flagFocusWorkers(locationMapping);
     } catch (const CustomErrors& e) {
         std::cerr << e.what() << '\n';
         succesfullyInitialized = false;
@@ -731,10 +792,30 @@ std::vector<unsigned> Simulation<PositionType,
     // 3 HCWQI - contact-quarantined, infected but not diagnosed
     // 4 HCWQN - contact-quarantined, not infected
     // 5 HCWU  - infected, undiagnosed, not quarantined (still working)
+    // With --hcwFocus the same split follows for the focus workers (FHCWH..FHCWU), after their headcount
+    // (FHCW) and new infections on the day (FHCE).
+    bool focusOn = !hcwFocusArg.empty();
+    for (int group = 0; group < (focusOn ? 2 : 1); group++) {
+    thrust::device_vector<bool>& mask = group == 0 ? healthcareWorker : focusWorker;
+    if (group == 1) {
+        unsigned exposedFocus = thrust::count_if(
+            thrust::make_zip_iterator(thrust::make_tuple(mask.begin(), agentStats.begin())),
+            thrust::make_zip_iterator(thrust::make_tuple(mask.end(), agentStats.end())),
+            [timestamp, timeStepL] HD(thrust::tuple<bool, AgentStats> tup) {
+                return thrust::get<0>(tup) &&
+                    (thrust::get<1>(tup).infectedTimestamp > timestamp - 24 * 60 / timeStepL &&
+                        thrust::get<1>(tup).infectedTimestamp <= timestamp);
+            });
+        stats.push_back(focusWorkerCount);
+        stats.push_back(exposedFocus);
+        if (print) {
+            std::cout << focusWorkerCount << "\t" << exposedFocus << "\t";
+        }
+    }
     auto hciBegin = thrust::make_zip_iterator(thrust::make_tuple(
-        healthcareWorker.begin(), ppstates.begin(), quarantined.begin(), diagnosed.begin(), agentStats.begin()));
+        mask.begin(), ppstates.begin(), quarantined.begin(), diagnosed.begin(), agentStats.begin()));
     auto hciEnd = thrust::make_zip_iterator(
-        thrust::make_tuple(healthcareWorker.end(), ppstates.end(), quarantined.end(), diagnosed.end(), agentStats.end()));
+        thrust::make_tuple(mask.end(), ppstates.end(), quarantined.end(), diagnosed.end(), agentStats.end()));
     for (unsigned category = 1; category <= 5; category++) {
         unsigned count = thrust::count_if(hciBegin, hciEnd, [category] HD(thrust::tuple<bool, PPState, bool, bool, AgentStats> tup) {
             if (!thrust::get<0>(tup)) return false;
@@ -754,8 +835,9 @@ std::vector<unsigned> Simulation<PositionType,
         });
         stats.push_back(count);
         if (print) {
-            std::cout << count << (category < 5 ? '\t' : '\n');
+            std::cout << count << (category < 5 || (group == 0 && focusOn) ? '\t' : '\n');
         }
+    }
     }
 
     return stats;

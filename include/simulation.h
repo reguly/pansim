@@ -84,6 +84,11 @@ public:
     Timehandler simTime;
     thrust::device_vector<bool> healthcareWorker;
     unsigned healthcareWorkerCount;
+    // Healthcare workers of a chosen set of workplaces (--hcwFocus), reported in separate output
+    // columns (FHCW...), e.g. the staff of one clinical centre to compare with its own absence data
+    std::string hcwFocusArg;
+    thrust::device_vector<bool> focusWorker;
+    unsigned focusWorkerCount = 0;
     std::vector<int> totalHospitalizations;
     unsigned dueWithCOVID;
     double currentMaskValue = 1.0;
@@ -123,7 +128,11 @@ public:
             cxxopts::value<std::string>()->default_value("inputConfigFiles/dailyHospitalizationTargets.txt"))
             ("dueWithCOVID",
             "total hospitalization target should be reached with 0 - unrelated+due to COVID, or 1 - unrelated+with COVID",
-            cxxopts::value<unsigned>()->default_value("0"));
+            cxxopts::value<unsigned>()->default_value("0"))
+            ("hcwFocus",
+            "Workplaces whose healthcare workers get separate output columns (FHCW, FHCE, FHCWH..FHCWU): "
+            "comma-separated location IDs, or 'hospital' for every hospital-type workplace (default: none)",
+            cxxopts::value<std::string>()->default_value(""));
 
         InfectionPolicy<Simulation>::addProgramParameters(options);
         MovementPolicy<Simulation>::addProgramParameters(options);
@@ -140,6 +149,8 @@ public:
     std::vector<unsigned> refreshAndPrintStatistics(Timehandler& simTime, bool print = true);
 
     void flagHealthcareWorkers();
+
+    void flagFocusWorkers(const std::map<std::string, unsigned>& locationMapping);
 
     void setupHospitalizations(const cxxopts::ParseResult& result);
 
