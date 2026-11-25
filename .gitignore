@@ -37,4 +37,5 @@ experiments/hcw_interventions/outputs/
 experiments/validation_1yr/data/hungarian_data/
 experiments/hcw_interventions/ODE/kalibracio_kimenet/
 experiments/hcw_interventions/ODE/egyenletek/
-experiments/hcw_interventions/ODE/egyenletek_kepek/experiments/szte_covid_center/outputs/
+experiments/hcw_interventions/ODE/egyenletek_kepek/
+experiments/szte_covid_center/outputs/
