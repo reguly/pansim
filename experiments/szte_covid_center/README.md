@@ -68,6 +68,24 @@ Viszonyítási kör: a JEK négy helyszínének 1802 dolgozója.
 
 Egyetlen futás, csak a működés ellenőrzése. A kapcsolók nélküli futás kimenete formailag változatlan.
 
+## Eredmény (6 forgatókönyv x 20 futás, 2026-11-25)
+
+`python analyze_szte.py` → `outputs/` (git-ignored, mert az SZTE-görbe bizalmas). Kiesés = pozitív +
+kontaktkarantén, a 2. hullám csúcsa:
+
+| forgatókönyv | kör | csúcs | fertőzés / 100 fő, 2. hullám |
+|---|---|---|---|
+| SZTE (valós) | 3798 fő | 10,0% (nov. 9.) | – |
+| `baseline_szte` | központ | 3,2% | 25,9 |
+| `covidCenter` / `Mild` / `Koranyi` | központ | 2,8–2,9% | 21,0–22,7 |
+| `baseline_focusJEK` | JEK | 3,3% | 25,8 |
+| `covidCenter_focusJEK` | JEK | 3,7% | 33,9 |
+
+Az összevonás a JEK dolgozóinak fertőzését 31%-kal növeli, a központ egészéét és a városi járványt viszont
+csökkenti (a többi kórházból eltűnnek a COVID-betegek). Az SZTE-szint harmadát sem éri el: a központ 10%-os
+csúcsához a JEK-ben kb. 30%-os egyidejű kiesés kellene. Maradó magyarázatok: régióból érkező betegek, tágabb
+kiesés-definíció, vagy általánosan alulbecsült kórházi HCW-fertőzés.
+
 ## Korlátok
 
 - Egy kórház egyetlen keveredési tér: a JEK minden dolgozója egyformán ki van téve a COVID-betegeknek.
