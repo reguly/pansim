@@ -49,10 +49,13 @@ Az SZTE-vel összevethető kiesés: `(FHCWH + FHCWD + FHCWQI + FHCWQN) / FHCW`.
 # a repó gyökeréből; előbb rövid próba
 RESULTS_ROOT=experiments/szte_covid_center/results_smoke N_RUNS=2 WEEKS=2 \
 SCENARIOS_FILE=experiments/szte_covid_center/scenarios.yaml ./experiments/hcw_interventions/run_scenarios.sh
-# teljes köteg (6 forgatókönyv x 20 futás x 52 hét)
-RESULTS_ROOT=experiments/szte_covid_center/results \
-SCENARIOS_FILE=experiments/szte_covid_center/scenarios.yaml ./experiments/hcw_interventions/run_scenarios.sh
+# teljes köteg (6 forgatókönyv x 20 futás x 52 hét, kb. 8 óra) Slurm-jobként
+sbatch experiments/szte_covid_center/run_szte.sbatch
 ```
+
+A `run_szte.sbatch` a korábbi `hci_split.sbatch` mintájára készült (`cpu` partíció, 16 szál, 12 óra,
+`~/PanSim/pansim`). Ha a job időkorlát miatt leáll, újra beküldhető: a már kész forgatókönyveket
+(van `all_runs.tsv`) átugorja. A napló a beküldés könyvtárában: `szte_covid_<jobid>.log`.
 
 ## Füstteszt (helyben, WSL/OMP, egy-egy 10 hetes futás)
 
