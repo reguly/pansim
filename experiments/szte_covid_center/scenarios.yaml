@@ -1,0 +1,24 @@
+# SZTE COVID-központ teszt (README.md). Futtatás a repó gyökeréből:
+#   RESULTS_ROOT=experiments/szte_covid_center/results \
+#   SCENARIOS_FILE=experiments/szte_covid_center/scenarios.yaml \
+#   ./experiments/hcw_interventions/run_scenarios.sh
+# Előbb egy rövid próba: N_RUNS=2 WEEKS=2 a fenti elé, más RESULTS_ROOT-tal.
+#
+# Helyszínek (hospitals.csv, a koordináták alapján azonosítva, ellenőrizendő):
+#   JEK, Kálvária sgt. 57. (a fő COVID-épület) = a négy egy ponton lévő kórház:
+#       28565_1491, 178777_1503, 221632_1504, 221633_1505   (1802 dolgozó)
+#   Korányi fasor 8. (a JEK fekvőbeteg-ellátásának része) = 64118_1496   (420 dolgozó)
+# Viszonyítási kör: a teljes klinikai központ = mind a 17 kórház dolgozói ("hospital", 6811 fő).
+# Sorrend = prioritás.
+
+# 1. A teljes klinikai központ dolgozói, átirányítás nélkül (viszonyítási alap)
+baseline_szte: "--hcwFocus hospital"
+# 2. Minden súlyos COVID-beteg a JEK-be kerül
+covidCenter: "--hcwFocus hospital --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505"
+# 3. Mint 2., de az enyhe esetek kórházi látogatásai is (légúti ambulancia a JEK-ben)
+covidCenterMild: "--hcwFocus hospital --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505 --covidHospitalsMild 1"
+# 4. A COVID-épület saját dolgozói: átirányítás nélkül és átirányítással
+baseline_focusJEK: "--hcwFocus 28565_1491,178777_1503,221632_1504,221633_1505"
+covidCenter_focusJEK: "--hcwFocus 28565_1491,178777_1503,221632_1504,221633_1505 --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505"
+# 5. JEK + Korányi fasor 8. mint COVID-ellátóhely
+covidCenterKoranyi: "--hcwFocus hospital --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505,64118_1496"
