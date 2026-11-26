@@ -49,7 +49,7 @@ Az SZTE-vel összevethető kiesés: `(FHCWH + FHCWD + FHCWQI + FHCWQN) / FHCW`.
 # a repó gyökeréből; előbb rövid próba
 RESULTS_ROOT=experiments/szte_covid_center/results_smoke N_RUNS=2 WEEKS=2 \
 SCENARIOS_FILE=experiments/szte_covid_center/scenarios.yaml ./experiments/hcw_interventions/run_scenarios.sh
-# teljes köteg (6 forgatókönyv x 20 futás x 52 hét, kb. 8 óra) Slurm-jobként
+# teljes köteg (6 forgatókönyv x 20 futás x 52 hét, kb. 4,5 óra, forgatókönyvenként 45 perc) Slurm-jobként
 sbatch experiments/szte_covid_center/run_szte.sbatch
 ```
 

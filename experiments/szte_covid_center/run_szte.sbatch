@@ -6,7 +6,7 @@
 #SBATCH --output=szte_covid_%j.log
 
 # SZTE COVID-centre batch (README.md): every scenario in scenarios.yaml, 20 runs x 52 weeks,
-# ~1.3 h per scenario. If the job hits the time limit, submit it again: scenarios that already
+# ~45 min per scenario (4.5 h in all). If the job hits the time limit, submit it again: scenarios that already
 # have all_runs.tsv are skipped. Submit with: sbatch experiments/szte_covid_center/run_szte.sbatch
 
 module load gpu/cuda/11.4
