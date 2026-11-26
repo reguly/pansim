@@ -1,0 +1,16 @@
+# SZTE COVID-központ teszt, 2. kör: a kórházban fekvő COVID-betegek fertőzőképessége (README.md, hospInf).
+# Alapérték: I5_h, I6_h infectious = 0,1 (progressions_Jun17_tune/transition_config.json). A konfigurációkat a
+# make_hosp_inf_configs.py készíti; a --progression itt felülírja a run_20_sims.sh validated beállítását.
+# Futtatás a repó gyökeréből:
+#   SCENARIOS=experiments/szte_covid_center/scenarios_hospinf.yaml sbatch experiments/szte_covid_center/run_szte.sbatch
+# Sorrend = prioritás. JEK = 28565_1491,178777_1503,221632_1504,221633_1505 (1802 dolgozó).
+
+# 1-4. Súlyos betegek a JEK-ben, a teljes klinikai központ (17 kórház, 6811 fő) mérve, négy fertőzőképesség
+covidCenter_hospInf03: "--hcwFocus hospital --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505 --progression inputConfigFiles/progressions_Jun17_tune/transition_config_hospInf03.json"
+covidCenter_hospInf05: "--hcwFocus hospital --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505 --progression inputConfigFiles/progressions_Jun17_tune/transition_config_hospInf05.json"
+covidCenter_hospInf07: "--hcwFocus hospital --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505 --progression inputConfigFiles/progressions_Jun17_tune/transition_config_hospInf07.json"
+covidCenter_hospInf10: "--hcwFocus hospital --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505 --progression inputConfigFiles/progressions_Jun17_tune/transition_config_hospInf10.json"
+# 5. Kontroll: átirányítás nélkül, 1,0 (a fertőzőképesség és az összevonás hatása külön)
+baseline_hospInf10: "--hcwFocus hospital --progression inputConfigFiles/progressions_Jun17_tune/transition_config_hospInf10.json"
+# 6. A JEK saját dolgozói, átirányítással, 1,0
+covidCenter_focusJEK_hospInf10: "--hcwFocus 28565_1491,178777_1503,221632_1504,221633_1505 --covidHospitals 28565_1491,178777_1503,221632_1504,221633_1505 --progression inputConfigFiles/progressions_Jun17_tune/transition_config_hospInf10.json"

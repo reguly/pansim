@@ -104,6 +104,37 @@ Az új baseline a korábbit visszaadja (a `--hcwFocus` csak kiír, nem változta
 fertőzését 4–9%-kal csökkenti, a 2. hullámban erősebben; a 3. hullámban kissé több a fertőzés (kevesebb
 védett az előző hullámból).
 
+## 2. kör: a kórházi COVID-betegek fertőzőképessége (hospInf)
+
+**Kérdés:** közelebb kerül-e a modell az SZTE-görbéhez, ha a kórházban fekvő COVID-betegek jobban fertőznek?
+A validált beállításban (`inputConfigFiles/progressions_Jun17_tune/transition_config.json`) az I5_h és I6_h
+állapot fertőzőképessége 0,1, vagyis a tünetes otthoni beteg (I3, I4: 1,0) tizede. A `make_hosp_inf_configs.py`
+ennek másolatait készíti 0,3 / 0,5 / 0,7 / 1,0 értékkel ugyanabba a könyvtárba
+(`transition_config_hospInf03.json` stb.); a forgatókönyv `--progression` kapcsolója felülírja a validált
+beállításét (az utolsó érték érvényes, mint a `--closures`-nél). C++-módosítás nincs.
+
+| forgatókönyv (`scenarios_hospinf.yaml`) | fertőzőképesség | átirányítás | mért kör |
+|---|---|---|---|
+| `covidCenter_hospInf03`, `_05`, `_07`, `_10` | 0,3 / 0,5 / 0,7 / 1,0 | súlyos betegek a JEK-be | központ (6811 fő) |
+| `baseline_hospInf10` | 1,0 | nincs | központ |
+| `covidCenter_focusJEK_hospInf10` | 1,0 | súlyos betegek a JEK-be | JEK (1802 fő) |
+
+Az összevetés alapja a már lefutott `baseline_szte`, `covidCenter` és `covidCenter_focusJEK` (0,1).
+
+```bash
+# a repó gyökeréből; füstteszt, a naplóban a cmd sorban a hospInf-konfigurációnak kell látszania
+RESULTS_ROOT=experiments/szte_covid_center/results_smoke N_RUNS=2 WEEKS=2 \
+SCENARIOS_FILE=experiments/szte_covid_center/scenarios_hospinf.yaml ./experiments/hcw_interventions/run_scenarios.sh
+# teljes köteg (6 forgatókönyv, kb. 4,5 óra)
+SCENARIOS=experiments/szte_covid_center/scenarios_hospinf.yaml sbatch experiments/szte_covid_center/run_szte.sbatch
+```
+
+Elemzés: `python analyze_hospinf.py` → `outputs/hospinf_summary.csv`, `outputs/hospinf.png` (kiesés az
+SZTE-görbéhez képest, a 2. hullám csúcsa a fertőzőképesség függvényében, a városi COVID-halálozás
+hullámonként a skálázott valós adathoz képest). A fertőzőképesség emelése a nem COVID-os kórházi betegeket is
+fertőzi, így a városi járványt és a halálozást is növelheti: ha a halálozás illeszkedése romlik, azt az
+eredménynél külön jelezni kell.
+
 ## Korlátok
 
 - Egy kórház egyetlen keveredési tér: a JEK minden dolgozója egyformán ki van téve a COVID-betegeknek.
