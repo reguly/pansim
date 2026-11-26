@@ -86,6 +86,24 @@ csökkenti (a többi kórházból eltűnnek a COVID-betegek). Az SZTE-szint harm
 csúcsához a JEK-ben kb. 30%-os egyidejű kiesés kellene. Maradó magyarázatok: régióból érkező betegek, tágabb
 kiesés-definíció, vagy általánosan alulbecsült kórházi HCW-fertőzés.
 
+### Összevetés a korábbi baseline-nal (összes HCW, 10 136 fő)
+
+`python compare_baseline.py` → `outputs/szte_vs_baseline.png` (+ `.csv`, `_weekly.csv`). A korábbi baseline a
+`hcw_interventions/results_hci_split/baseline` (20 futás). Éves HCW-fertőzés a korábbi baseline arányában
+(bootstrap 95% CI) és a kiesés 2. hullámbeli csúcsa:
+
+| forgatókönyv | HCW-fertőzés / év | arány | kiesés csúcsa |
+|---|---|---|---|
+| korábbi baseline | 4273 | 1,000 (0,981–1,021) | 3,35% (nov. 26.) |
+| `baseline_szte` | 4275 | 1,001 (0,977–1,024) | 3,31% |
+| `covidCenter` | 3971 | 0,929 (0,909–0,950) | 2,94% |
+| `covidCenterMild` | 3871 | 0,906 (0,889–0,924) | 2,98% |
+| `covidCenterKoranyi` | 4083 | 0,956 (0,936–0,974) | 2,89% |
+
+Az új baseline a korábbit visszaadja (a `--hcwFocus` csak kiír, nem változtat). Az átirányítás az összes HCW
+fertőzését 4–9%-kal csökkenti, a 2. hullámban erősebben; a 3. hullámban kissé több a fertőzés (kevesebb
+védett az előző hullámból).
+
 ## Korlátok
 
 - Egy kórház egyetlen keveredési tér: a JEK minden dolgozója egyformán ki van téve a COVID-betegeknek.
